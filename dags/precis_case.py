@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 # Simple Python function
 def hello_world():
-    print("Hello from your first DAG in PrecisCase!")
+    print("Hello from your first DAG in PrecisCase! Comolocco")
 
 # Default DAG arguments
 default_args = {
