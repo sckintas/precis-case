@@ -202,6 +202,26 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
             for item in data:
                 # Convert micros to float dollars
                 item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
+                
+                # Ensure budget_id exists
+                if 'id' in item and 'budget_id' not in item:
+                    item['budget_id'] = item.pop('id')
+                
+                # Add campaign_id if missing (either from mock data or derive it)
+                if 'campaign_id' not in item:
+                    # Option 1: Set a default value if appropriate
+                    item['campaign_id'] = "default_campaign"
+                    
+                    # Option 2: Or derive from other fields if possible
+                    # item['campaign_id'] = derive_campaign_id(item)
+
+        return pd.DataFrame(data)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
+        raise
+    except ValueError as e:
+        logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
+        raise
 
         # Normalize field names for campaigns
         if "campaigns" in url:
