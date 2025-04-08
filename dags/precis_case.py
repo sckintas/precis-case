@@ -69,7 +69,7 @@ TABLE_SCHEMAS = {
 
 
     "metrics": [
-    {"name": "campaign_id", "type": "STRING"},
+    {"name": "ad_group_id", "type": "STRING"},
     {"name": "ad_group_id", "type": "STRING"},
     {"name": "ad_id", "type": "STRING"},
     {"name": "date", "type": "DATE"},
@@ -102,7 +102,7 @@ REQUIRED_FIELDS = {
     "campaigns": ["campaign_id", "campaign_name", "date"],
     "ad_groups": ["ad_group_id", "campaign_id", "date"],
     "ads": ["ad_id", "ad_group_id", "date"],
-    "metrics": ["date", "campaign_id"],
+    "metrics": ["date", "ad_group_id"],
     "budgets": ["campaign_id", "date"]
 }
 
@@ -237,14 +237,22 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                 data = data['metrics']
 
             for item in data:
-                # Ensure 'campaign_id' is added if missing
-                if 'campaign_id' not in item:
-                    item['campaign_id'] = "default_campaign_id"  # Replace with actual logic if needed
-                # Ensure 'ad_group_id' and 'ad_id' are properly formatted
-                if 'ad_group_id' in item:
-                    item['ad_group_id'] = str(item['ad_group_id'])
-                if 'ad_id' in item:
-                    item['ad_id'] = str(item['ad_id'])
+                # Convert micro amounts to standard values
+                if 'average_cpc' in item:
+                    item['average_cpc'] = item['average_cpc'] / 1000000  # Convert micros to standard
+                
+                # Ensure all numeric fields are properly typed
+                numeric_fields = {
+                    'clicks': int,
+                    'impressions': int,
+                    'ctr': float,
+                    'cost_micros': int,
+                    'conversions': float
+                }
+                
+                for field, dtype in numeric_fields.items():
+                    if field in item and item[field] is not None:
+                        item[field] = dtype(item[field])
 
         return pd.DataFrame(data)
     except requests.exceptions.RequestException as e:
