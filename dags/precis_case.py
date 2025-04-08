@@ -480,7 +480,7 @@ def migrate_campaign_table_schema():
 
         # 💡 Drop the temp table if it already exists
         try:
-            client.delete_table(temp_table_ref)
+            client.delete_table(temp_table_ref, not_found_ok=True)
             logger.info("🧹 Deleted existing campaigns_temp table")
         except Exception:
             logger.info("ℹ️ campaigns_temp table did not exist")
@@ -496,7 +496,7 @@ def migrate_campaign_table_schema():
 
         query = f"""
         SELECT
-            campaign_id,
+            CAST(campaign_id AS STRING) AS campaign_id,
             campaign_name,
             status,
             CAST(optimization_score AS FLOAT64) AS optimization_score,
@@ -507,8 +507,8 @@ def migrate_campaign_table_schema():
 
         client.query(query, job_config=job_config).result()
 
-        # Replace original table
-        client.delete_table(table_ref)
+        # Replace original table with the new schema
+        client.delete_table(table_ref, not_found_ok=True)
         client.create_table(bigquery.Table(table_ref, schema=new_schema))
         client.copy_table(temp_table_ref, table_ref)
         client.delete_table(temp_table_ref)
