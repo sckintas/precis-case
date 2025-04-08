@@ -319,6 +319,48 @@ def migrate_metrics_table_schema():
         logger.error(f"❌ Failed to migrate schema: {str(e)}")
         raise
 
+def migrate_ad_groups_schema():
+    table_ref = client.dataset(DATASET_ID).table("ad_groups")
+
+    try:
+        table = client.get_table(table_ref)
+        new_schema = []
+        for field in table.schema:
+            if field.name == "ad_group_id":
+                new_schema.append(bigquery.SchemaField("ad_group_id", "STRING"))
+            else:
+                new_schema.append(field)
+
+        temp_table_ref = client.dataset(DATASET_ID).table("ad_groups_temp")
+        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
+        client.create_table(temp_table)
+
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref,
+            write_disposition="WRITE_TRUNCATE"
+        )
+        query = f"""
+        SELECT 
+            CAST(ad_group_id AS STRING) AS ad_group_id,
+            campaign_id,
+            ad_group_name,
+            status
+        FROM `{PROJECT_ID}.{DATASET_ID}.ad_groups`
+        """
+        client.query(query, job_config=job_config).result()
+
+        client.delete_table(table_ref)
+        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        client.copy_table(temp_table_ref, table_ref)
+        client.delete_table(temp_table_ref)
+
+        logger.info("✅ Successfully migrated ad_groups table schema")
+
+    except Exception as e:
+        logger.error(f"❌ Failed to migrate ad_groups schema: {str(e)}")
+        raise
+
+
 def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
     logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
