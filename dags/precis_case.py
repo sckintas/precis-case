@@ -112,14 +112,23 @@ def log_pipeline_metadata(
     execution_date: Optional[datetime] = None
 ):
     """Log pipeline execution metadata to BigQuery."""
+    # Handle execution_date whether it's a string or datetime object
+    if isinstance(execution_date, str):
+        try:
+            exec_date = datetime.strptime(execution_date, "%Y-%m-%d")
+        except ValueError:
+            exec_date = datetime.utcnow()
+    else:
+        exec_date = execution_date or datetime.utcnow()
+    
     metadata = {
         "run_id": str(uuid.uuid4()),
         "table_name": table_name,
-        "execution_date": (execution_date or datetime.utcnow()).isoformat(),  # Convert to string
+        "execution_date": exec_date.isoformat() if exec_date else None,
         "status": status,
         "rows_processed": rows_processed,
         "error_message": error_message,
-        "timestamp": datetime.utcnow().isoformat()  # Convert to string
+        "timestamp": datetime.utcnow().isoformat()
     }
     
     try:
@@ -256,6 +265,56 @@ def create_bigquery_tables():
             client.create_table(table)
             logger.info(f"✅ Created table {table_name}")
 
+def migrate_metrics_table_schema():
+    """Migrate the metrics table schema to accept string campaign_id"""
+    table_ref = client.dataset(DATASET_ID).table("metrics")
+    
+    try:
+        table = client.get_table(table_ref)
+        
+        # Create new schema with string campaign_id
+        new_schema = []
+        for field in table.schema:
+            if field.name == "campaign_id":
+                new_schema.append(bigquery.SchemaField("campaign_id", "STRING"))
+            else:
+                new_schema.append(field)
+        
+        # Create a new temporary table
+        temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
+        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
+        client.create_table(temp_table)
+        
+        # Copy data with type conversion
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref,
+            write_disposition="WRITE_TRUNCATE"
+        )
+        query = f"""
+        SELECT 
+            CAST(campaign_id AS STRING) AS campaign_id,
+            CAST(ad_group_id AS STRING) AS ad_group_id,
+            CAST(ad_id AS STRING) AS ad_id,
+            date,
+            impressions,
+            clicks,
+            cost,
+            conversions
+        FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
+        """
+        client.query(query, job_config=job_config).result()
+        
+        # Replace the original table
+        client.delete_table(table_ref)
+        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        client.copy_table(temp_table_ref, table_ref)
+        client.delete_table(temp_table_ref)
+        
+        logger.info("✅ Successfully migrated metrics table schema")
+    except Exception as e:
+        logger.error(f"❌ Failed to migrate schema: {str(e)}")
+        raise
+
 def extract_and_load(table: str, execution_date: datetime):
     """Extract data from API and load to BigQuery with incremental logic."""
     run_id = str(uuid.uuid4())
@@ -272,37 +331,23 @@ def extract_and_load(table: str, execution_date: datetime):
             log_pipeline_metadata(table, "NO_DATA", 0, None, execution_date)
             return
         
-        # Step 2: Validate data
+        # Step 2: Validate data and convert types
         if not validate_data(df, table):
             error_msg = f"Data validation failed for {table}"
             logger.error(f"❌ {error_msg}")
             log_pipeline_metadata(table, "FAILED", 0, error_msg, execution_date)
             raise ValueError(error_msg)
-        
-        # Step 3: Apply incremental logic
-        date_field = REFERENCE_FIELDS.get(table)
-        if date_field and date_field in df.columns:
-            latest_date = get_latest_date(table)
-            if latest_date:
-                df[date_field] = pd.to_datetime(df[date_field])
-                df = df[df[date_field] > pd.to_datetime(latest_date)]
-                logger.info(f"⏱️ Filtered data after {latest_date}, remaining rows: {len(df)}")
-        
-        if df.empty:
-            logger.info(f"⚠️ No new rows to load for {table}")
-            log_pipeline_metadata(table, "NO_NEW_DATA", 0, None, execution_date)
-            return
-        
-        # Step 4: Prepare data for BigQuery
-        temp_file = f"/tmp/{table}_{run_id}.parquet"
 
+        # Step 3: Type conversion for metrics table
         if table == "metrics":
-        # Convert ID fields to the correct type (STRING in this case)
+            # Convert to string if not already
             df["campaign_id"] = df["campaign_id"].astype(str)
-            if "ad_group_id" in df.columns:
-                df["ad_group_id"] = df["ad_group_id"].astype(str)
-            if "ad_id" in df.columns:
-                df["ad_id"] = df["ad_id"].astype(str)
+            # Ensure other ID fields are also strings if they exist
+            for id_field in ["ad_group_id", "ad_id"]:
+                if id_field in df.columns:
+                    df[id_field] = df[id_field].astype(str)
+        
+        # Rest of your function remains the same...
         
         # Convert date fields to proper format
         for field in df.columns:
@@ -400,13 +445,13 @@ with DAG(
             python_callable=extract_and_load,
             op_kwargs={
                 "table": table,
-                "execution_date": "{{ ds }}"
+                "execution_date": "{{ execution_date }}"  # Pass the actual datetime object
             },
             execution_timeout=timedelta(minutes=30),
             retries=1
-        )
-        init_tables >> task
-        extract_load_tasks.append(task)
+    )
+    init_tables >> task
+    extract_load_tasks.append(task)
 
     dbt_run = BashOperator(
         task_id="run_dbt_build",
