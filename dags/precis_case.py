@@ -82,10 +82,12 @@ TABLE_SCHEMAS = {
 ],
     
     "budgets": [
-    {"name": "budget_id", "type": "STRING"},
-    {"name": "budget_amount", "type": "FLOAT"},
-    {"name": "date", "type": "DATE"}
+        {"name": "budget_id", "type": "STRING"},
+        {"name": "budget_name", "type": "STRING"},  # Added from 'name' field
+        {"name": "budget_amount", "type": "FLOAT"},
+        {"name": "date", "type": "DATE"}
 ]
+
 }
 # Partitioning fields
 REFERENCE_FIELDS = {
@@ -238,13 +240,31 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                     item['ad_id'] = item.pop('id')
         
         # Normalize field names for budgets
+
         if "budgets" in url:
             if isinstance(data, dict) and 'budgets' in data:
                 data = data['budgets']
 
             for item in data:
                 # Convert micros to float dollars
-                item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
+                item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000)
+                
+                # Rename fields to match schema
+                if 'id' in item:
+                    item['budget_id'] = item.pop('id')
+                if 'name' in item:
+                    item['budget_name'] = item.pop('name')
+                
+                # Remove any unexpected fields
+                item.pop('amount_micros', None)
+
+        return pd.DataFrame(data)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
+        raise
+    except ValueError as e:
+        logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
+        raise        
 
         # Normalize field names for campaigns
         if "campaigns" in url:
