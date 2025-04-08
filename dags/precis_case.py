@@ -295,26 +295,16 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
         if 'id' in df.columns and 'ad_id' not in df.columns:
             df = df.rename(columns={'id': 'ad_id'})
 
+    if table_name == "campaigns":
+        if 'id' in df.columns and 'campaign_id' not in df.columns:
+            df = df.rename(columns={'id': 'campaign_id'})
+        if 'name' in df.columns and 'campaign_name' not in df.columns:
+            df = df.rename(columns={'name': 'campaign_name'})
 
     if table_name == "metrics":
         for field in ["campaign_id", "ad_group_id", "ad_id"]:
             if field in df.columns:
                 df[field] = df[field].astype(str)
-    
-    if table_name == "campaigns":
-    # Verify optimization_score is between 0 and 100 if present
-        if 'optimization_score' in df.columns:
-            if (df['optimization_score'] < 0).any() or (df['optimization_score'] > 100).any():
-                logger.warning("⚠️ optimization_score out of 0-100 range - clipping")
-                df['optimization_score'] = df['optimization_score'].clip(0, 100)
-        
-        # Ensure status values are valid
-        valid_statuses = ['ENABLED', 'PAUSED', 'REMOVED', 'UNKNOWN']
-        if 'status' in df.columns:
-            invalid_status = ~df['status'].isin(valid_statuses)
-            if invalid_status.any():
-                logger.warning(f"⚠️ Invalid status values found: {df[invalid_status]['status'].unique()}")
-                df.loc[invalid_status, 'status'] = 'UNKNOWN'
 
     # Check required fields exist
     missing_fields = [field for field in required_fields if field not in df.columns]
