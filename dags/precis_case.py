@@ -179,6 +179,16 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                     item['ad_group_id'] = item.pop('id')
                 if 'name' in item and 'ad_group_name' not in item:
                     item['ad_group_name'] = item.pop('name')
+
+        # Normalize field names for ads
+        if "ads" in url:
+            if isinstance(data, dict) and 'ads' in data:
+                data = data['ads']
+
+            for item in data:
+                if 'id' in item and 'ad_id' not in item:
+                    item['ad_id'] = item.pop('id')
+
                     
         return pd.DataFrame(data)
     except requests.exceptions.RequestException as e:
