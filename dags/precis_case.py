@@ -273,88 +273,139 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 
 def create_bigquery_tables():
-    """Create BigQuery tables with proper schemas, partitioning, and clustering."""
-    # First ensure metadata table exists
+    """Create BigQuery tables with optimized schemas, partitioning, clustering, and cost controls."""
+    # Define optimal clustering configurations per table
+    CLUSTERING_CONFIG = {
+        "campaigns": ["campaign_id", "status"],
+        "ad_groups": ["campaign_id", "ad_group_id", "status"],
+        "ads": ["ad_group_id", "status"],
+        "metrics": ["ad_group_id"],  # Already partitioned by date
+        "budgets": ["budget_id"]
+    }
+
+    # Define table expiration (90 days for metrics, 1 year for others)
+    EXPIRATION_CONFIG = {
+        "metrics": timedelta(days=90),
+        "*": timedelta(days=365)  # Default
+    }
+
+    # 1. Create/update metadata table
     metadata_schema = [
-        bigquery.SchemaField("run_id", "STRING"),
-        bigquery.SchemaField("table_name", "STRING"),
-        bigquery.SchemaField("execution_date", "TIMESTAMP"),
-        bigquery.SchemaField("status", "STRING"),
+        bigquery.SchemaField("run_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("table_name", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("execution_date", "TIMESTAMP", mode="REQUIRED"),
+        bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
         bigquery.SchemaField("rows_processed", "INTEGER"),
         bigquery.SchemaField("error_message", "STRING"),
-        bigquery.SchemaField("timestamp", "TIMESTAMP")
+        bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED")
     ]
 
+    metadata_table_ref = client.dataset(DATASET_ID).table("pipeline_metadata")
+    
     try:
-        metadata_table_ref = client.dataset(DATASET_ID).table("pipeline_metadata")
-        client.get_table(metadata_table_ref)
+        metadata_table = client.get_table(metadata_table_ref)
         logger.info("✅ Metadata table already exists")
     except Exception:
         metadata_table = bigquery.Table(metadata_table_ref, schema=metadata_schema)
+        metadata_table.expires = datetime.utcnow() + EXPIRATION_CONFIG["*"]
         client.create_table(metadata_table)
         logger.info("✅ Created metadata table")
 
-    # Create data tables with partitioning and clustering
+    # 2. Create/update data tables with optimizations
     for table_name, schema_def in TABLE_SCHEMAS.items():
         table_ref = client.dataset(DATASET_ID).table(table_name)
         schema = [bigquery.SchemaField(field["name"], field["type"]) for field in schema_def]
 
-        # Partitioning field (if available)
+        # Configure partitioning
         partition_field = REFERENCE_FIELDS.get(table_name)
+        partitioning = None
         if partition_field:
             partitioning = bigquery.TimePartitioning(
                 type_=bigquery.TimePartitioningType.DAY,
-                field=partition_field
+                field=partition_field,
+                expiration_ms=int(EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"]).total_seconds() * 1000)
             )
             logger.info(f"✅ Partitioning {table_name} on {partition_field}")
-        else:
-            partitioning = None
 
-        # Clustering fields (if any)
-        clustering_fields = [field["name"] for field in schema_def if field["name"] in ("campaign_id", "ad_group_id", "ad_id")]
+        # Configure clustering
+        clustering_fields = CLUSTERING_CONFIG.get(table_name, [])
         if clustering_fields:
             logger.info(f"✅ Clustering {table_name} on {clustering_fields}")
 
-        # Create or update table with partitioning and clustering if needed
         try:
             existing_table = client.get_table(table_ref)
-
-            # Compare schemas
-            existing_fields = {field.name: field.field_type for field in existing_table.schema}
+            
+            # Schema evolution handling
+            existing_fields = {field.name: field for field in existing_table.schema}
             new_fields = {field["name"]: field["type"] for field in schema_def}
+            
+            # Detect schema changes
+            added_fields = []
+            changed_fields = []
+            
+            for field_name, field_type in new_fields.items():
+                if field_name not in existing_fields:
+                    added_fields.append(field_name)
+                elif existing_fields[field_name].field_type != field_type:
+                    changed_fields.append(field_name)
 
-            # Check for new fields
-            added_fields = set(new_fields.keys()) - set(existing_fields.keys())
-            if added_fields:
-                logger.info(f"⚠️ New fields detected in {table_name}: {added_fields}")
-                updated_schema = existing_table.schema + [
-                    bigquery.SchemaField(field, new_fields[field])
-                    for field in added_fields
-                ]
+            if added_fields or changed_fields:
+                logger.info(f"🔧 Schema changes detected in {table_name}: "
+                          f"{len(added_fields)} added, {len(changed_fields)} changed")
+                
+                # Build updated schema
+                updated_schema = []
+                for field in schema_def:
+                    field_name = field["name"]
+                    if field_name in existing_fields:
+                        # Preserve existing field attributes
+                        updated_schema.append(existing_fields[field_name])
+                    else:
+                        # Add new field
+                        updated_schema.append(bigquery.SchemaField(field_name, field["type"]))
+
+                # Apply updates
                 table = bigquery.Table(table_ref, schema=updated_schema)
+                
+                # Maintain partitioning and clustering
                 if partitioning:
                     table.time_partitioning = partitioning
                 if clustering_fields:
                     table.clustering_fields = clustering_fields
-                client.update_table(table, ["schema", "time_partitioning", "clustering_fields"])
-                logger.info(f"✅ Updated schema for {table_name}")
+                
+                # Update expiration
+                table.expires = datetime.utcnow() + EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"])
+                
+                client.update_table(table, ["schema", "time_partitioning", "clustering_fields", "expires"])
+                logger.info(f"🔄 Updated schema for {table_name}")
 
             logger.info(f"✅ Table {table_name} already exists")
 
-        except Exception:
-            # Create new table if it doesn't exist
-            table = bigquery.Table(table_ref, schema=schema)
+        except Exception as e:
+            if "Not found" in str(e):
+                # Create new table with optimizations
+                table = bigquery.Table(table_ref, schema=schema)
+                
+                if partitioning:
+                    table.time_partitioning = partitioning
+                
+                if clustering_fields:
+                    table.clustering_fields = clustering_fields
+                
+                # Set table expiration
+                table.expires = datetime.utcnow() + EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"])
+                
+                client.create_table(table)
+                logger.info(f"🆕 Created table {table_name} with optimizations")
+            else:
+                logger.error(f"❌ Error processing {table_name}: {str(e)}")
+                raise
 
-            # Add partitioning if specified
-            if partitioning:
-                table.time_partitioning = partitioning
-
-            # Add clustering if specified
-            if clustering_fields:
-                table.clustering_fields = clustering_fields
-
-            client.create_table(table)
-            logger.info(f"✅ Created table {table_name}")
+    # 3. Create materialized views for common query patterns
+    try:
+        create_materialized_views()
+    except Exception as e:
+        logger.warning(f"⚠️ Could not create materialized views: {str(e)}")
 
 
 
