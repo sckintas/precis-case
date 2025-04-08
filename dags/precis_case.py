@@ -34,14 +34,13 @@ client = bigquery.Client(project=PROJECT_ID)
 METADATA_TABLE = f"{PROJECT_ID}.{DATASET_ID}.pipeline_metadata"
 
 # Local mock JSON file paths (replace GitHub URLs)
-MOCK_FILE_PATHS = {
-    "campaigns": "/mnt/data/campaigns.json",
-    "ad_groups": "/mnt/data/ad_groups.json",
-    "ads": "/mnt/data/ads.json",
-    "metrics": "/mnt/data/metrics.json",
-    "budgets": "/mnt/data/budgets.json"
+MOCK_API_URLS = {
+    "campaigns": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/campaigns.json",
+    "ad_groups": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ad_groups.json",
+    "ads": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ads.json",
+    "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
+    "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
 }
-
 # Schema definitions for each table
 TABLE_SCHEMAS = {
     "campaigns": [
