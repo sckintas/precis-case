@@ -326,7 +326,7 @@ def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
     logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
     
-    # Define temp file path at the start of the function
+    # Define temp file path - now correctly scoped inside the function
     temp_file = f"/tmp/{table}_{run_id}.parquet"
     
     try:
@@ -349,9 +349,7 @@ def extract_and_load(table: str, execution_date: datetime):
 
         # Step 3: Type conversion for metrics table
         if table == "metrics":
-            # Convert to string if not already
             df["campaign_id"] = df["campaign_id"].astype(str)
-            # Ensure other ID fields are also strings if they exist
             for id_field in ["ad_group_id", "ad_id"]:
                 if id_field in df.columns:
                     df[id_field] = df[id_field].astype(str)
