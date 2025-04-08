@@ -201,10 +201,16 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
 
             elif "budgets" in url:
                 item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
+
                 if 'id' in item and 'budget_id' not in item:
                     item['budget_id'] = item.pop('id')
+
+                if 'name' in item and 'budget_name' not in item:
+                    item['budget_name'] = item.pop('name')
+
                 if 'campaign_id' not in item:
                     item['campaign_id'] = "default_campaign"
+
 
             elif "metrics" in url:
                 if 'ad_group_id' not in item:
