@@ -172,108 +172,56 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         data = response.json()
-        
-        # Normalize field names for ad_groups
-        if "ad_groups" in url:
-            if isinstance(data, dict) and 'ad_groups' in data:
-                data = data['ad_groups']
-            
-            # Normalize field names to match our schema
-            for item in data:
+
+        # Extract list if nested under a key (e.g., {"campaigns": [...]})
+        for key in ["campaigns", "ad_groups", "ads", "metrics", "budgets"]:
+            if key in url and isinstance(data, dict) and key in data:
+                data = data[key]
+
+        # Normalize fields depending on data type
+        for item in data:
+            if "campaigns" in url:
+                if 'id' in item and 'campaign_id' not in item:
+                    item['campaign_id'] = item.pop('id')
+                if 'name' in item and 'campaign_name' not in item:
+                    item['campaign_name'] = item.pop('name')
+                if 'campaign_id' not in item:
+                    item['campaign_id'] = f"default_{uuid.uuid4().hex[:8]}"
+                if 'optimization_score' in item:
+                    item['optimization_score'] = float(item['optimization_score'])
+
+            elif "ad_groups" in url:
                 if 'id' in item and 'ad_group_id' not in item:
                     item['ad_group_id'] = item.pop('id')
                 if 'name' in item and 'ad_group_name' not in item:
                     item['ad_group_name'] = item.pop('name')
 
-        # Normalize field names for ads
-        if "ads" in url:
-            if isinstance(data, dict) and 'ads' in data:
-                data = data['ads']
-
-            for item in data:
+            elif "ads" in url:
                 if 'id' in item and 'ad_id' not in item:
                     item['ad_id'] = item.pop('id')
-        
-        # Normalize field names for budgets
-        if "budgets" in url:
-            if isinstance(data, dict) and 'budgets' in data:
-                data = data['budgets']
 
-            for item in data:
-                # Convert micros to float dollars
+            elif "budgets" in url:
                 item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
-                
-                # Ensure budget_id exists
                 if 'id' in item and 'budget_id' not in item:
                     item['budget_id'] = item.pop('id')
-                
-                # Add campaign_id if missing (either from mock data or derive it)
                 if 'campaign_id' not in item:
-                    # Option 1: Set a default value if appropriate
                     item['campaign_id'] = "default_campaign"
-                    
-                    # Option 2: Or derive from other fields if possible
-                    # item['campaign_id'] = derive_campaign_id(item)
 
-        return pd.DataFrame(data)
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
-        raise
-    except ValueError as e:
-        logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
-        raise
-
-        # Normalize field names for campaigns
-                # Normalize field names for campaigns
-        if "campaigns" in url:
-            if isinstance(data, dict) and 'campaigns' in data:
-                data = data['campaigns']
-
-            for item in data:
-                # Map 'id' to 'campaign_id' if needed
-                if 'id' in item and 'campaign_id' not in item:
-                    item['campaign_id'] = item.pop('id')
-                
-                # Map 'name' to 'campaign_name' if needed
-                if 'name' in item and 'campaign_name' not in item:
-                    item['campaign_name'] = item.pop('name')
-                
-                # Ensure required fields exist
-                if 'campaign_id' not in item:
-                    item['campaign_id'] = f"default_{uuid.uuid4().hex[:8]}"
-                
-                # Convert numeric fields
-                if 'optimization_score' in item:
-                    item['optimization_score'] = float(item['optimization_score'])
-
-        return pd.DataFrame(data)
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
-        raise
-    except ValueError as e:
-        logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
-        raise
-    
-        # Normalize field names for metrics
-        if "metrics" in url:
-            if isinstance(data, dict) and 'metrics' in data:
-                data = data['metrics']
-            
-            # Ensure all records have required fields
-            for item in data:
+            elif "metrics" in url:
                 if 'ad_group_id' not in item:
-                    item['ad_group_id'] = 'unknown'  # Default value if missing
+                    item['ad_group_id'] = 'unknown'
                 if 'date' not in item:
-                    item['date'] = datetime.now().strftime('%Y-%m-%d')  # Current date if missing
+                    item['date'] = datetime.now().strftime('%Y-%m-%d')
 
         return pd.DataFrame(data)
-    
+
     except requests.exceptions.RequestException as e:
         logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
         raise
     except ValueError as e:
         logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
         raise
+
 
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
