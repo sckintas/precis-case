@@ -109,6 +109,25 @@ REQUIRED_FIELDS = {
 
 
 
+# Partitioning fields (by 'date' or another field)
+REFERENCE_FIELDS = {
+    "campaigns": "date",
+    "ad_groups": "date",
+    "ads": "date",
+    "metrics": "date",
+    "budgets": "date"
+}
+
+# Clustering fields (fields used for clustering)
+CLUSTERING_CONFIG = {
+    "campaigns": ["campaign_id", "status"],
+    "ad_groups": ["campaign_id", "ad_group_id", "status"],
+    "ads": ["ad_group_id", "status"],
+    "metrics": ["ad_group_id"],
+    "budgets": ["budget_id"]
+}
+
+
 from datetime import datetime
 
 from datetime import datetime
@@ -281,166 +300,37 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 
 def create_bigquery_tables():
-    """Create BigQuery tables with optimized schemas, partitioning, clustering, and cost controls."""
-    # Define optimal clustering configurations per table
-    CLUSTERING_CONFIG = {
-        "campaigns": ["campaign_id", "status"],
-        "ad_groups": ["campaign_id", "ad_group_id", "status"],
-        "ads": ["ad_group_id", "status"],
-        "metrics": ["ad_group_id"],  # Already partitioned by date
-        "budgets": ["budget_id"]
-    }
-
-    # Define table expiration (90 days for metrics, 1 year for others)
-    EXPIRATION_CONFIG = {
-        "metrics": timedelta(days=90),
-        "*": timedelta(days=365)  # Default
-    }
-
-    # 1. Create/update metadata table
-    metadata_schema = [
-        bigquery.SchemaField("run_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("table_name", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("execution_date", "TIMESTAMP", mode="REQUIRED"),
-        bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("rows_processed", "INTEGER"),
-        bigquery.SchemaField("error_message", "STRING"),
-        bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED")
-    ]
-
-    metadata_table_ref = client.dataset(DATASET_ID).table("pipeline_metadata")
-    
-    try:
-        metadata_table = client.get_table(metadata_table_ref)
-        logger.info("✅ Metadata table already exists")
-    except Exception:
-        metadata_table = bigquery.Table(metadata_table_ref, schema=metadata_schema)
-        metadata_table.expires = datetime.utcnow() + EXPIRATION_CONFIG["*"]
-        client.create_table(metadata_table)
-        logger.info("✅ Created metadata table")
-
-    # 2. Create/update data tables with optimizations
+    """Create or update BigQuery tables with partitioning and clustering."""
+    # Iterate through each table and apply partitioning and clustering
     for table_name, schema_def in TABLE_SCHEMAS.items():
         table_ref = client.dataset(DATASET_ID).table(table_name)
         schema = [bigquery.SchemaField(field["name"], field["type"]) for field in schema_def]
 
-        # Configure partitioning
+        # Define partitioning and clustering
         partition_field = REFERENCE_FIELDS.get(table_name)
         partitioning = None
         if partition_field:
             partitioning = bigquery.TimePartitioning(
                 type_=bigquery.TimePartitioningType.DAY,
-                field=partition_field,
-                expiration_ms=int(EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"]).total_seconds() * 1000)
+                field=partition_field
             )
-            logger.info(f"✅ Partitioning {table_name} on {partition_field}")
 
-        # Configure clustering
         clustering_fields = CLUSTERING_CONFIG.get(table_name, [])
-        if clustering_fields:
-            logger.info(f"✅ Clustering {table_name} on {clustering_fields}")
 
         try:
             existing_table = client.get_table(table_ref)
-            if existing_table.time_partitioning is None:
-                # Create new partitioned table and copy data
-                logger.info(f"🔄 Creating new partitioned table for {table_name}")
-                
-                # Create new partitioned table
-                table = bigquery.Table(table_ref, schema=schema)
-                if partitioning:
-                    table.time_partitioning = partitioning
-                if clustering_fields:
-                    table.clustering_fields = clustering_fields
-                
-                table.expires = datetime.utcnow() + EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"])
-                client.create_table(table)
-                logger.info(f"✅ Created new partitioned table {table_name}")
+            logger.info(f"✅ Table {table_name} already exists.")
+        except Exception:
+            # Create new table with partitioning and clustering
+            table = bigquery.Table(table_ref, schema=schema)
+            if partitioning:
+                table.time_partitioning = partitioning
+            if clustering_fields:
+                table.clustering_fields = clustering_fields
+            client.create_table(table)
+            logger.info(f"✅ Created table {table_name} with partitioning and clustering.")
 
-                # Copy data from the old table to the new one
-                copy_job = client.copy_table(
-                    existing_table,
-                    table_ref
-                )
-                copy_job.result()  # Wait for completion
-                logger.info(f"✅ Copied data to the new partitioned table {table_name}")
-
-                # Delete the old table
-                client.delete_table(existing_table)
-                logger.info(f"🧹 Deleted old table {table_name}")
-
-            else:
-                # Schema evolution handling
-                existing_fields = {field.name: field for field in existing_table.schema}
-                new_fields = {field["name"]: field["type"] for field in schema_def}
-                
-                # Detect schema changes
-                added_fields = []
-                changed_fields = []
-                
-                for field_name, field_type in new_fields.items():
-                    if field_name not in existing_fields:
-                        added_fields.append(field_name)
-                    elif existing_fields[field_name].field_type != field_type:
-                        changed_fields.append(field_name)
-
-                if added_fields or changed_fields:
-                    logger.info(f"🔧 Schema changes detected in {table_name}: "
-                              f"{len(added_fields)} added, {len(changed_fields)} changed")
-                    
-                    # Build updated schema
-                    updated_schema = []
-                    for field in schema_def:
-                        field_name = field["name"]
-                        if field_name in existing_fields:
-                            # Preserve existing field attributes
-                            updated_schema.append(existing_fields[field_name])
-                        else:
-                            # Add new field
-                            updated_schema.append(bigquery.SchemaField(field_name, field["type"]))
-
-                    # Apply updates
-                    table = bigquery.Table(table_ref, schema=updated_schema)
-                    
-                    # Maintain partitioning and clustering
-                    if partitioning:
-                        table.time_partitioning = partitioning
-                    if clustering_fields:
-                        table.clustering_fields = clustering_fields
-                    
-                    # Update expiration
-                    table.expires = datetime.utcnow() + EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"])
-                    
-                    client.update_table(table, ["schema", "time_partitioning", "clustering_fields", "expires"])
-                    logger.info(f"🔄 Updated schema for {table_name}")
-
-            logger.info(f"✅ Table {table_name} already exists")
-
-        except Exception as e:
-            if "Not found" in str(e):
-                # Create new table with optimizations
-                table = bigquery.Table(table_ref, schema=schema)
-                
-                if partitioning:
-                    table.time_partitioning = partitioning
-                
-                if clustering_fields:
-                    table.clustering_fields = clustering_fields
-                
-                # Set table expiration
-                table.expires = datetime.utcnow() + EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"])
-                
-                client.create_table(table)
-                logger.info(f"🆕 Created table {table_name} with optimizations")
-            else:
-                logger.error(f"❌ Error processing {table_name}: {str(e)}")
-                raise
-
-    # 3. Create materialized views for common query patterns
-    try:
-        create_materialized_views()
-    except Exception as e:
-        logger.warning(f"⚠️ Could not create materialized views: {str(e)}")
+# Ensure partitioning and clustering are applied to new tables
 
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
@@ -500,17 +390,17 @@ def filter_incremental_data(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
 def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
     """Load data into BigQuery and log the row count."""
     
-    # Ensure partitioning and clustering configurations are applied
+    # Ensure partitioning is applied
     partition_field = REFERENCE_FIELDS.get(table_name)
     partitioning = None
     if partition_field:
         partitioning = bigquery.TimePartitioning(
             type_=bigquery.TimePartitioningType.DAY,
-            field=partition_field
+            field=partition_field  # Partitioning by 'date' field
         )
         logger.info(f"✅ Partitioning {table_name} on {partition_field}")
 
-    # Retrieve clustering configuration
+    # Ensure clustering is applied
     clustering_fields = CLUSTERING_CONFIG.get(table_name, [])
     if clustering_fields:
         logger.info(f"✅ Clustering {table_name} on {clustering_fields}")
@@ -518,7 +408,7 @@ def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
     # Define job config for loading data into BigQuery (e.g., write mode)
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
-        write_disposition="WRITE_APPEND",  # Adjust based on your needs
+        write_disposition="WRITE_APPEND",  # Adjust this as needed (WRITE_TRUNCATE for full replace)
         schema_update_options=[
             bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
             bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION
@@ -531,6 +421,7 @@ def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
     temp_file = f"/tmp/{table_name}.parquet"
     pq.write_table(pa.Table.from_pandas(df), temp_file)
 
+    # Load the Parquet file into BigQuery
     with open(temp_file, "rb") as f:
         job = client.load_table_from_file(
             f,
@@ -587,6 +478,7 @@ def extract_and_load(table: str, execution_date: datetime):
     except Exception as e:
         log_pipeline_metadata(table, "FAILED", 0, str(e), execution_date)
         logger.error(f"❌ Error processing {table}: {str(e)}")
+
 
 
 def log_pipeline_metadata(
