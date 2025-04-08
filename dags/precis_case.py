@@ -518,10 +518,14 @@ def migrate_budgets_schema():
 
 
 def migrate_campaign_table_schema():
-    """Migrate the campaigns table schema to match updated definition."""
+    """Migrate the campaigns table schema to include new fields."""
     table_ref = client.dataset(DATASET_ID).table("campaigns")
+    temp_table_ref = client.dataset(DATASET_ID).table("campaigns_temp")
 
     try:
+        client.delete_table(temp_table_ref, not_found_ok=True)
+        logger.info("🧹 Deleted existing campaigns_temp table")
+
         new_schema = [
             bigquery.SchemaField("campaign_id", "STRING"),
             bigquery.SchemaField("campaign_name", "STRING"),
@@ -529,32 +533,28 @@ def migrate_campaign_table_schema():
             bigquery.SchemaField("optimization_score", "FLOAT"),
             bigquery.SchemaField("advertising_channel_type", "STRING"),
             bigquery.SchemaField("bidding_strategy_type", "STRING"),
-            bigquery.SchemaField("budget_id", "STRING"),
-            bigquery.SchemaField("date", "DATE")
+            bigquery.SchemaField("date", "DATE"),
         ]
 
-        temp_table_ref = client.dataset(DATASET_ID).table("campaigns_temp")
-        client.delete_table(temp_table_ref, not_found_ok=True)
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
         query = f"""
-        SELECT 
+        SELECT
             CAST(campaign_id AS STRING) AS campaign_id,
             campaign_name,
             status,
             CAST(optimization_score AS FLOAT64) AS optimization_score,
             advertising_channel_type,
             bidding_strategy_type,
-            budget_id,
             date
         FROM `{PROJECT_ID}.{DATASET_ID}.campaigns`
         """
+
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref,
+            write_disposition="WRITE_TRUNCATE"
+        )
 
         client.query(query, job_config=job_config).result()
 
@@ -568,6 +568,7 @@ def migrate_campaign_table_schema():
     except Exception as e:
         logger.error(f"❌ Failed to migrate campaigns schema: {str(e)}")
         raise
+
 
 
 def extract_and_load(table: str, execution_date: datetime):
