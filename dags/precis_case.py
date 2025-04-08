@@ -377,8 +377,8 @@ def migrate_metrics_table_schema():
         # Query to transform data during migration
         query = f"""
         SELECT 
-            CAST(COALESCE(campaign_id, '') AS STRING) AS campaign_id,
-            CAST(COALESCE(ad_group_id, '') AS STRING) AS ad_group_id,
+            CAST(COALESCE(campaign_id, '') AS STRING) AS campaign_id,  -- Safely handle missing campaign_id
+            CAST(COALESCE(ad_group_id, '') AS STRING) AS ad_group_id,   -- Same for ad_group_id and ad_id
             CAST(COALESCE(ad_id, '') AS STRING) AS ad_id,
             date,
             impressions,
@@ -388,6 +388,7 @@ def migrate_metrics_table_schema():
             cost_micros,
             conversions
         FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
+
 
         """
 
