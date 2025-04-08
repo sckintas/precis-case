@@ -579,7 +579,6 @@ def migrate_campaigns_schema():
             CAST(campaign_id AS STRING) AS campaign_id,
             campaign_name,
             status,
-            CAST(optimization_score AS FLOAT64) AS optimization_score,
             advertising_channel_type,
             bidding_strategy_type,
             date
