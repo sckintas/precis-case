@@ -489,8 +489,8 @@ def migrate_campaign_table_schema():
 
         query = f"""
         SELECT
-            CAST(id AS STRING) AS campaign_id,
-            CAST(name AS STRING) AS campaign_name,
+            campaign_id,
+            campaign_name,
             status,
             CAST(optimization_score AS FLOAT64) AS optimization_score,
             advertising_channel_type,
