@@ -423,14 +423,13 @@ def migrate_ads_schema():
 
         query = f"""
         SELECT 
-            CAST(ad_id AS STRING) AS ad_id,
-            CAST(ad_group_id AS STRING) AS ad_group_id,
-            headline,
-            final_url,
-            status,
-            start_date,
-            end_date
+        CAST(ad_id AS STRING) AS ad_id,
+        CAST(ad_group_id AS STRING) AS ad_group_id,
+        headline,
+        final_url,
+        status
         FROM `{PROJECT_ID}.{DATASET_ID}.ads`
+
         """
 
         client.query(query, job_config=job_config).result()
