@@ -47,9 +47,9 @@ TABLE_SCHEMAS = {
         {"name": "campaign_id", "type": "STRING"},
         {"name": "campaign_name", "type": "STRING"},
         {"name": "status", "type": "STRING"},
-        {"name": "optimization_score", "type": "FLOAT"},
         {"name": "advertising_channel_type", "type": "STRING"},
         {"name": "bidding_strategy_type", "type": "STRING"},
+        {"name": "budget_id", "type": "STRING"},
         {"name": "date", "type": "DATE"}
     ],
 
@@ -99,7 +99,7 @@ REFERENCE_FIELDS = {
 
 # Required fields for each table (data validation)
 REQUIRED_FIELDS = {
-    "campaigns": ["campaign_id", "date"],
+    "campaigns": ["campaign_id", "campaign_name", "date"],
     "ad_groups": ["ad_group_id", "campaign_id", "date"],
     "ads": ["ad_id", "ad_group_id", "date"],
     "metrics": ["ad_group_id", "date"],
@@ -253,7 +253,7 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
     except ValueError as e:
         logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
         raise
-
+    
         # Normalize field names for metrics
         if "metrics" in url:
             if isinstance(data, dict) and 'metrics' in data:
@@ -674,21 +674,6 @@ def extract_and_load(table: str, execution_date: datetime):
             logger.error(f"❌ {msg}")
             log_pipeline_metadata(table, "FAILED", 0, msg, execution_date)
             raise ValueError(msg)
-        
-        if table_name == "campaigns":
-    # Verify optimization_score is between 0 and 100 if present
-            if 'optimization_score' in df.columns:
-                if (df['optimization_score'] < 0).any() or (df['optimization_score'] > 100).any():
-                    logger.warning("⚠️ optimization_score out of 0-100 range - clipping")
-                    df['optimization_score'] = df['optimization_score'].clip(0, 100)
-            
-            # Ensure status values are valid
-            valid_statuses = ['ENABLED', 'PAUSED', 'REMOVED', 'UNKNOWN']
-            if 'status' in df.columns:
-                invalid_status = ~df['status'].isin(valid_statuses)
-                if invalid_status.any():
-                    logger.warning(f"⚠️ Invalid status values found: {df[invalid_status]['status'].unique()}")
-                    df.loc[invalid_status, 'status'] = 'UNKNOWN'
 
         # Step 2: Apply data type conversions as needed
         if table == "metrics":
