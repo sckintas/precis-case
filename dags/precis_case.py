@@ -103,7 +103,7 @@ REQUIRED_FIELDS = {
     "ad_groups": ["ad_group_id", "campaign_id", "date"],
     "ads": ["ad_id", "ad_group_id", "date"],
     "metrics": ["ad_group_id", "date"],
-    "budgets": ["campaign_id", "date"]
+    "budgets": ["budget_id", "date"] 
 }
 
 
@@ -242,7 +242,12 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
     if table_name == "budgets":
         if 'id' in df.columns and 'budget_id' not in df.columns:
-            df = df.rename(columns={'id': 'budget_id'})
+            df.rename(columns={'id': 'budget_id'}, inplace=True)
+        if 'name' in df.columns and 'budget_name' not in df.columns:
+            df.rename(columns={'name': 'budget_name'}, inplace=True)
+        if 'amount_micros' in df.columns and 'budget_amount' not in df.columns:
+            df['budget_amount'] = df['amount_micros'] / 1_000_000
+            df.drop('amount_micros', axis=1, inplace=True)
 
     if table_name == "ads":
         if 'id' in df.columns and 'ad_id' not in df.columns:
