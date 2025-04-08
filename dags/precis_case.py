@@ -85,7 +85,7 @@ TABLE_SCHEMAS = {
 
 # Partitioning fields
 REFERENCE_FIELDS = {
-    "campaigns": ["campaign_id", "campaign_name"],
+    "campaigns": "start_date",
     "ad_groups": "start_date",
     "ads": "start_date",
     "metrics": "date",
