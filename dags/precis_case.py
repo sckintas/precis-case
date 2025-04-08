@@ -14,6 +14,12 @@ import os
 import logging
 import json
 from typing import Dict, List, Optional
+import tempfile
+
+
+temp_file = os.path.join(tempfile.gettempdir(), f"{table}_{run_id}.parquet")
+logger.info(f"📝 Writing parquet to temporary file: {temp_file}")
+
 
 # Logger configuration
 logger = logging.getLogger("airflow")
@@ -320,6 +326,9 @@ def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
     logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
     
+    # Define temp file path at the start of the function
+    temp_file = f"/tmp/{table}_{run_id}.parquet"
+    
     try:
         # Step 1: Fetch data from API
         url = MOCK_API_URLS[table]
@@ -347,8 +356,21 @@ def extract_and_load(table: str, execution_date: datetime):
                 if id_field in df.columns:
                     df[id_field] = df[id_field].astype(str)
         
-        # Rest of your function remains the same...
+        # Step 4: Apply incremental logic
+        date_field = REFERENCE_FIELDS.get(table)
+        if date_field and date_field in df.columns:
+            latest_date = get_latest_date(table)
+            if latest_date:
+                df[date_field] = pd.to_datetime(df[date_field])
+                df = df[df[date_field] > pd.to_datetime(latest_date)]
+                logger.info(f"⏱️ Filtered data after {latest_date}, remaining rows: {len(df)}")
         
+        if df.empty:
+            logger.info(f"⚠️ No new rows to load for {table}")
+            log_pipeline_metadata(table, "NO_NEW_DATA", 0, None, execution_date)
+            return
+        
+        # Step 5: Prepare data for BigQuery
         # Convert date fields to proper format
         for field in df.columns:
             if "date" in field.lower() or field == REFERENCE_FIELDS.get(table):
@@ -357,7 +379,7 @@ def extract_and_load(table: str, execution_date: datetime):
         # Write to parquet
         pq.write_table(pa.Table.from_pandas(df), temp_file)
         
-        # Step 5: Load to BigQuery
+        # Step 6: Load to BigQuery
         job_config = bigquery.LoadJobConfig(
             source_format=bigquery.SourceFormat.PARQUET,
             write_disposition="WRITE_APPEND",
@@ -377,17 +399,23 @@ def extract_and_load(table: str, execution_date: datetime):
             job.result()  # Wait for job to complete
         
         # Clean up
-        os.remove(temp_file)
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
         
         # Log success
         log_pipeline_metadata(table, "SUCCESS", len(df), None, execution_date)
         logger.info(f"✅ Successfully loaded {len(df)} rows to {table}")
         
     except Exception as e:
+        # Clean up temp file if it exists
+        if 'temp_file' in locals() and os.path.exists(temp_file):
+            os.remove(temp_file)
+            
         error_msg = f"Error processing {table}: {str(e)}"
         logger.error(f"❌ {error_msg}")
         log_pipeline_metadata(table, "FAILED", 0, error_msg, execution_date)
         raise
+
 
 def get_latest_date(table: str) -> Optional[datetime]:
     """Get the latest date from a BigQuery table."""
