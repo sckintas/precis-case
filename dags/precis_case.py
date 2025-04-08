@@ -173,12 +173,11 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
         response.raise_for_status()
         data = response.json()
 
-        # Extract list if nested under a key (e.g., {"campaigns": [...]})
+        # Extract list if nested under a key
         for key in ["campaigns", "ad_groups", "ads", "metrics", "budgets"]:
             if key in url and isinstance(data, dict) and key in data:
                 data = data[key]
 
-        # Normalize fields depending on data type
         for item in data:
             if "campaigns" in url:
                 if 'id' in item and 'campaign_id' not in item:
