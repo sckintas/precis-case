@@ -658,22 +658,23 @@ def extract_and_load(table: str, execution_date: datetime):
             log_pipeline_metadata(table, "NO_DATA", 0, None, execution_date)
             return
 
-        # Additional data processing for specific tables if needed
-        # Ensure data validation, incremental logic, and conversion happens here
+        # Step 1: Ensure all required fields are present in the data
         if not validate_data(df, table):
-            msg = f"Data validation failed for {table}"
+            msg = f"Data validation failed for {table}. Missing required fields."
             logger.error(f"❌ {msg}")
             log_pipeline_metadata(table, "FAILED", 0, msg, execution_date)
             raise ValueError(msg)
 
-        # Step 3: Type conversion for metrics table
+        # Step 2: Apply data type conversions as needed
         if table == "metrics":
+            # Ensure 'average_cpc' is treated as FLOAT
+            df["average_cpc"] = df["average_cpc"].astype(float, errors='ignore')  # Convert to float if possible
             df["campaign_id"] = df["campaign_id"].astype(str)
             for id_field in ["ad_group_id", "ad_id"]:
                 if id_field in df.columns:
                     df[id_field] = df[id_field].astype(str)
 
-        # Step 4: Apply incremental logic
+        # Step 3: Apply incremental logic
         date_field = REFERENCE_FIELDS.get(table)
         if date_field and date_field in df.columns:
             latest_date = get_latest_date(table)
@@ -687,18 +688,19 @@ def extract_and_load(table: str, execution_date: datetime):
             log_pipeline_metadata(table, "NO_NEW_DATA", 0, None, execution_date)
             return
 
-        # Convert date fields to proper format
+        # Step 4: Convert date fields to proper format
         for field in df.columns:
-            if "date" in field.lower():
+            if "date" in field.lower() or field == REFERENCE_FIELDS.get(table):
                 df[field] = pd.to_datetime(df[field]).dt.date
 
+        # Step 5: Write to Parquet file
         pq.write_table(pa.Table.from_pandas(df), temp_file)
 
         # Step 6: Load to BigQuery
         job_config = bigquery.LoadJobConfig(
             source_format=bigquery.SourceFormat.PARQUET,
             write_disposition="WRITE_APPEND",
-            schema_update_options=[
+            schema_update_options=[  # Allow schema updates if needed
                 bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
                 bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION
             ]
@@ -711,16 +713,18 @@ def extract_and_load(table: str, execution_date: datetime):
                 f"{PROJECT_ID}.{DATASET_ID}.{table}",
                 job_config=job_config
             )
-            job.result()
+            job.result()  # Wait for job to complete
 
         os.remove(temp_file)
         log_pipeline_metadata(table, "SUCCESS", len(df), None, execution_date)
         logger.info(f"✅ Successfully loaded {len(df)} rows to {table}")
 
     except Exception as e:
+        # Cleanup any temporary files in case of failure
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
+        # Log the error and metadata
         error_msg = f"Error processing {table}: {str(e)}"
         logger.error(f"❌ {error_msg}")
         log_pipeline_metadata(table, "FAILED", 0, error_msg, execution_date)
