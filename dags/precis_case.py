@@ -110,6 +110,8 @@ REQUIRED_FIELDS = {
 
 from datetime import datetime
 
+from datetime import datetime
+
 def log_pipeline_metadata(
     table_name: str,
     status: str,
@@ -119,20 +121,20 @@ def log_pipeline_metadata(
 ):
     """Log pipeline execution metadata to BigQuery."""
     
-    # If execution_date is a string, convert it to datetime
+    # Check if execution_date is a string and convert it to datetime
     if isinstance(execution_date, str):
         try:
             execution_date = datetime.strptime(execution_date, "%Y-%m-%dT%H:%M:%S")
         except ValueError:
             execution_date = datetime.utcnow()  # Default to UTC if the format is wrong
 
-    # Handle execution_date (now guaranteed to be a datetime object)
+    # Handle execution_date, now guaranteed to be a datetime object
     exec_date = execution_date or datetime.utcnow()
 
     metadata = {
         "run_id": str(uuid.uuid4()),
         "table_name": table_name,
-        "execution_date": exec_date.isoformat(),  # Now it's guaranteed to be a datetime object
+        "execution_date": exec_date.isoformat(),  # Safely call isoformat now
         "status": status,
         "rows_processed": rows_processed,
         "error_message": error_message,
