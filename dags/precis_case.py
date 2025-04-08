@@ -45,12 +45,12 @@ MOCK_API_URLS = {
 # Schema definitions for each table
 TABLE_SCHEMAS = {
     "campaigns": [
-        {"name": "campaign_id", "type": "INTEGER"},
+        {"name": "campaign_id", "type": "STRING"},
         {"name": "campaign_name", "type": "STRING"},
         {"name": "status", "type": "STRING"},
-        {"name": "start_date", "type": "DATE"},
-        {"name": "end_date", "type": "DATE"},
-        {"name": "budget", "type": "FLOAT"}
+        {"name": "optimization_score", "type": "FLOAT"},
+        {"name": "advertising_channel_type", "type": "STRING"},
+        {"name": "bidding_strategy_type", "type": "STRING"}
     ],
     "ad_groups": [
         {"name": "ad_group_id", "type": "INTEGER"},
@@ -85,7 +85,7 @@ TABLE_SCHEMAS = {
 
 # Partitioning fields
 REFERENCE_FIELDS = {
-    "campaigns": "start_date",
+    "campaigns": ["campaign_id", "campaign_name"],
     "ad_groups": "start_date",
     "ads": "start_date",
     "metrics": "date",
@@ -195,7 +195,14 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                 # Convert micros to float dollars
                 item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
 
-
+        if "campaigns" in url:
+            if isinstance(data, dict) and 'campaigns' in data:
+                data = data['campaigns']
+            for item in data:
+                if 'id' in item and 'campaign_id' not in item:
+                    item['campaign_id'] = item.pop('id')
+                if 'name' in item and 'campaign_name' not in item:
+                    item['campaign_name'] = item.pop('name')
                     
         return pd.DataFrame(data)
     except requests.exceptions.RequestException as e:
@@ -461,6 +468,49 @@ def migrate_budgets_schema():
     except Exception as e:
         logger.error(f"❌ Failed to migrate budgets schema: {str(e)}")
         raise
+def migrate_campaign_table_schema():
+    """Migrate the campaigns table schema to match updated definition."""
+    table_ref = client.dataset(DATASET_ID).table("campaigns")
+
+    try:
+        # Build new schema based on updated TABLE_SCHEMAS
+        new_schema = [bigquery.SchemaField(field["name"], field["type"]) for field in TABLE_SCHEMAS["campaigns"]]
+
+        # Create a temporary table
+        temp_table_ref = client.dataset(DATASET_ID).table("campaigns_temp")
+        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
+        client.create_table(temp_table)
+
+        # Copy data with necessary field casting
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref,
+            write_disposition="WRITE_TRUNCATE"
+        )
+
+        query = f"""
+        SELECT
+            CAST(id AS STRING) AS campaign_id,
+            CAST(name AS STRING) AS campaign_name,
+            status,
+            CAST(optimization_score AS FLOAT64) AS optimization_score,
+            advertising_channel_type,
+            bidding_strategy_type
+        FROM `{PROJECT_ID}.{DATASET_ID}.campaigns`
+        """
+
+        client.query(query, job_config=job_config).result()
+
+        # Replace original table
+        client.delete_table(table_ref)
+        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        client.copy_table(temp_table_ref, table_ref)
+        client.delete_table(temp_table_ref)
+
+        logger.info("✅ Successfully migrated campaigns table schema")
+
+    except Exception as e:
+        logger.error(f"❌ Failed to migrate campaigns schema: {str(e)}")
+        raise
 
 
 def extract_and_load(table: str, execution_date: datetime):
@@ -637,6 +687,12 @@ with DAG(
         migrate_budgets_schema_task = PythonOperator(
             task_id="migrate_budgets_schema",
             python_callable=migrate_budgets_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
+
+        migrate_campaigns_schema_task = PythonOperator(
+            task_id="migrate_campaigns_schema",
+            python_callable=migrate_campaigns_schema,
             execution_timeout=timedelta(minutes=10)
         )
 
