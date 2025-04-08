@@ -106,24 +106,7 @@ REQUIRED_FIELDS = {
     "budgets": ["campaign_id", "date"]
 }
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.bash import BashOperator
-from airflow.models import Variable
-from airflow.utils.email import send_email
-from google.cloud import bigquery
-from datetime import datetime, timedelta
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-import requests
-import uuid
-import os
-import logging
-import json
-from typing import Dict, List, Optional
-import tempfile
-from airflow.utils.task_group import TaskGroup
+
 
 
 # Logger configuration
