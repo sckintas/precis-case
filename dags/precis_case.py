@@ -87,7 +87,6 @@ TABLE_SCHEMAS = {
         {"name": "budget_amount", "type": "FLOAT"},
         {"name": "date", "type": "DATE"}
 ]
-
 }
 # Partitioning fields
 REFERENCE_FIELDS = {
@@ -105,6 +104,51 @@ REQUIRED_FIELDS = {
     "ads": ["ad_id", "ad_group_id", "date"],
     "metrics": ["date", "campaign_id"],
     "budgets": ["campaign_id", "date"]
+}
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.operators.bash import BashOperator
+from airflow.models import Variable
+from airflow.utils.email import send_email
+from google.cloud import bigquery
+from datetime import datetime, timedelta
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import requests
+import uuid
+import os
+import logging
+import json
+from typing import Dict, List, Optional
+import tempfile
+from airflow.utils.task_group import TaskGroup
+
+
+# Logger configuration
+logger = logging.getLogger("airflow")
+logger.setLevel(logging.INFO)
+
+# Variables from Airflow UI
+PROJECT_ID = Variable.get("GCP_PROJECT_ID")
+DATASET_ID = Variable.get("DATASET_ID")
+BQ_REGION = Variable.get("BQ_REGION", default_var="us")
+ALERT_EMAILS = Variable.get("ALERT_EMAILS", default_var="").split(",")
+
+# BigQuery client
+client = bigquery.Client(project=PROJECT_ID)
+
+# Metadata table for logging
+METADATA_TABLE = f"{PROJECT_ID}.{DATASET_ID}.pipeline_metadata"
+
+# GitHub-hosted mock JSON endpoints
+MOCK_API_URLS = {
+    "campaigns": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/campaigns.json",
+    "ad_groups": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ad_groups.json",
+    "ads": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ads.json",
+    "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
+    "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
 }
 
 
@@ -195,31 +239,13 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                     item['ad_id'] = item.pop('id')
         
         # Normalize field names for budgets
-
         if "budgets" in url:
             if isinstance(data, dict) and 'budgets' in data:
                 data = data['budgets']
 
             for item in data:
                 # Convert micros to float dollars
-                item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000)
-                
-                # Rename fields to match schema
-                if 'id' in item:
-                    item['budget_id'] = item.pop('id')
-                if 'name' in item:
-                    item['budget_name'] = item.pop('name')
-                
-                # Remove any unexpected fields
-                item.pop('amount_micros', None)
-
-        return pd.DataFrame(data)
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
-        raise
-    except ValueError as e:
-        logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
-        raise        
+                item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
 
         # Normalize field names for campaigns
         if "campaigns" in url:
