@@ -320,6 +320,7 @@ def migrate_metrics_table_schema():
         raise
 
 def migrate_ad_groups_schema():
+    """Migrate the ad_groups table schema to STRING ad_group_id and campaign_id."""
     table_ref = client.dataset(DATASET_ID).table("ad_groups")
 
     try:
@@ -328,6 +329,8 @@ def migrate_ad_groups_schema():
         for field in table.schema:
             if field.name == "ad_group_id":
                 new_schema.append(bigquery.SchemaField("ad_group_id", "STRING"))
+            elif field.name == "campaign_id":
+                new_schema.append(bigquery.SchemaField("campaign_id", "STRING"))
             else:
                 new_schema.append(field)
 
@@ -342,7 +345,7 @@ def migrate_ad_groups_schema():
         query = f"""
         SELECT 
             CAST(ad_group_id AS STRING) AS ad_group_id,
-            campaign_id,
+            CAST(campaign_id AS STRING) AS campaign_id,
             ad_group_name,
             status
         FROM `{PROJECT_ID}.{DATASET_ID}.ad_groups`
@@ -359,6 +362,7 @@ def migrate_ad_groups_schema():
     except Exception as e:
         logger.error(f"❌ Failed to migrate ad_groups schema: {str(e)}")
         raise
+
 
 
 def extract_and_load(table: str, execution_date: datetime):
@@ -385,10 +389,8 @@ def extract_and_load(table: str, execution_date: datetime):
                 df = df.rename(columns={'name': 'ad_group_name'})
             if 'status' not in df.columns:
                 df['status'] = 'ENABLED'
+    # Do NOT cast to int
 
-            # 🔧 Cast to integer to match existing schema
-            df['ad_group_id'] = df['ad_group_id'].astype(int)
-            df['campaign_id'] = df['campaign_id'].astype(int)
 
 
 
@@ -523,6 +525,13 @@ with DAG(
         execution_timeout=timedelta(minutes=15)
     )
 
+    migrate_ad_groups_schema_task = PythonOperator(
+    task_id="migrate_ad_groups_schema",
+    python_callable=migrate_ad_groups_schema,
+    execution_timeout=timedelta(minutes=10)
+)
+
+
     # Create all extract/load tasks
     extract_load_campaigns = PythonOperator(
         task_id="extract_load_campaigns",
@@ -587,22 +596,24 @@ with DAG(
     )
 
     # Set up dependencies
-    init_tables >> migrate_schema
-    
-    # Run all extract/load tasks in parallel after schema migration
-    migrate_schema >> [
-        extract_load_campaigns,
-        extract_load_ad_groups,
-        extract_load_ads,
-        extract_load_metrics,
-        extract_load_budgets
-    ]
-    
-    # All extract/load tasks must complete before dbt runs
-    [
-        extract_load_campaigns,
-        extract_load_ad_groups,
-        extract_load_ads,
-        extract_load_metrics,
-        extract_load_budgets
-    ] >> dbt_run
+    # DAG flow
+init_tables >> migrate_schema >> migrate_ad_groups_schema_task
+
+# Run extract/load tasks after schema steps
+migrate_schema >> [
+    extract_load_campaigns,
+    extract_load_ads,
+    extract_load_metrics,
+    extract_load_budgets
+]
+
+migrate_ad_groups_schema_task >> extract_load_ad_groups
+
+# All extract/load tasks must complete before dbt runs
+[
+    extract_load_campaigns,
+    extract_load_ad_groups,
+    extract_load_ads,
+    extract_load_metrics,
+    extract_load_budgets
+] >> dbt_run
