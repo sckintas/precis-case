@@ -478,6 +478,14 @@ def migrate_campaign_table_schema():
 
         # Create a temporary table
         temp_table_ref = client.dataset(DATASET_ID).table("campaigns_temp")
+
+        # 💡 Drop the temp table if it already exists
+        try:
+            client.delete_table(temp_table_ref)
+            logger.info("🧹 Deleted existing campaigns_temp table")
+        except Exception:
+            logger.info("ℹ️ campaigns_temp table did not exist")
+
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
