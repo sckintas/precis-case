@@ -108,6 +108,8 @@ REQUIRED_FIELDS = {
 
 
 
+from datetime import datetime
+
 def log_pipeline_metadata(
     table_name: str,
     status: str,
@@ -116,31 +118,34 @@ def log_pipeline_metadata(
     execution_date: Optional[datetime] = None
 ):
     """Log pipeline execution metadata to BigQuery."""
-    # Handle execution_date whether it's a string or datetime object
+    
+    # If execution_date is a string, convert it to datetime
     if isinstance(execution_date, str):
         try:
-            exec_date = datetime.strptime(execution_date, "%Y-%m-%d")
+            execution_date = datetime.strptime(execution_date, "%Y-%m-%dT%H:%M:%S")
         except ValueError:
-            exec_date = datetime.utcnow()
-    else:
-        exec_date = execution_date or datetime.utcnow()
-    
+            execution_date = datetime.utcnow()  # Default to UTC if the format is wrong
+
+    # Handle execution_date (now guaranteed to be a datetime object)
+    exec_date = execution_date or datetime.utcnow()
+
     metadata = {
         "run_id": str(uuid.uuid4()),
         "table_name": table_name,
-        "execution_date": exec_date.isoformat() if exec_date else None,
+        "execution_date": exec_date.isoformat(),  # Now it's guaranteed to be a datetime object
         "status": status,
         "rows_processed": rows_processed,
         "error_message": error_message,
         "timestamp": datetime.utcnow().isoformat()
     }
-    
+
     try:
         errors = client.insert_rows_json(METADATA_TABLE, [metadata])
         if errors:
             logger.error(f"❌ Failed to log metadata: {errors}")
     except Exception as e:
         logger.error(f"❌ Error logging metadata: {str(e)}")
+
 
 def notify_failure(context):
     """Send email notification on task failure."""
