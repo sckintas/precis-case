@@ -66,18 +66,20 @@ TABLE_SCHEMAS = {
         {"name": "status", "type": "STRING"},
         {"name": "date", "type": "DATE"}
     ],
+
+
     "metrics": [
-        {"name": "campaign_id", "type": "STRING"},
-        {"name": "ad_group_id", "type": "STRING"},
-        {"name": "ad_id", "type": "STRING"},
-        {"name": "date", "type": "DATE"},
-        {"name": "impressions", "type": "INTEGER"},
-        {"name": "clicks", "type": "INTEGER"},
-        {"name": "ctr", "type": "FLOAT"},
-        {"name": "average_cpc", "type": "FLOAT"},
-        {"name": "cost_micros", "type": "INTEGER"},
-        {"name": "conversions", "type": "FLOAT"}
-    ],
+    {"name": "campaign_id", "type": "STRING"},
+    {"name": "ad_group_id", "type": "STRING"},
+    {"name": "ad_id", "type": "STRING"},
+    {"name": "date", "type": "DATE"},
+    {"name": "impressions", "type": "INTEGER"},
+    {"name": "clicks", "type": "INTEGER"},
+    {"name": "ctr", "type": "FLOAT"},
+    {"name": "average_cpc", "type": "FLOAT"},  
+    {"name": "cost_micros", "type": "INTEGER"},
+    {"name": "conversions", "type": "FLOAT"}
+],
     
     "budgets": [
     {"name": "budget_id", "type": "STRING"},
