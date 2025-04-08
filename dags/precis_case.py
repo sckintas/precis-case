@@ -199,17 +199,22 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                 if 'id' in item and 'ad_id' not in item:
                     item['ad_id'] = item.pop('id')
 
-            elif "budgets" in url:
-                item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
+            if "budgets" in url:
+                logger.info("🧪 Normalizing budgets...")
 
-                if 'id' in item and 'budget_id' not in item:
-                    item['budget_id'] = item.pop('id')
+                for item in data:
+                    item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
 
-                if 'name' in item and 'budget_name' not in item:
-                    item['budget_name'] = item.pop('name')
+                    if 'id' in item and 'budget_id' not in item:
+                        item['budget_id'] = item.pop('id')
 
-                if 'campaign_id' not in item:
-                    item['campaign_id'] = "default_campaign"
+                    if 'name' in item and 'budget_name' not in item:
+                        item['budget_name'] = item.pop('name')
+
+                    if 'campaign_id' not in item:
+                        item['campaign_id'] = "default_campaign"
+
+                logger.info(f"🧪 Sample normalized budget row: {json.dumps(data[0], indent=2)}")
 
 
             elif "metrics" in url:
