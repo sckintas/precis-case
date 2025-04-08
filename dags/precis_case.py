@@ -436,7 +436,7 @@ def create_bigquery_tables():
 
 
 
-def migrate_metrics_table_schema():
+def migrate_metrics_schema():
     """Migrate the metrics table schema to accept string IDs and updated fields."""
     table_ref = client.dataset(DATASET_ID).table("metrics")
     temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
