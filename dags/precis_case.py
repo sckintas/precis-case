@@ -405,6 +405,14 @@ def migrate_ads_schema():
                 new_schema.append(field)
 
         temp_table_ref = client.dataset(DATASET_ID).table("ads_temp")
+
+        # 💡 Drop the temp table if it already exists
+        try:
+            client.delete_table(temp_table_ref, not_found_ok=True)
+            logger.info("🧹 Deleted existing ads_temp table")
+        except Exception:
+            logger.info("ℹ️ ads_temp table did not exist")
+
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
@@ -418,8 +426,8 @@ def migrate_ads_schema():
             CAST(ad_id AS STRING) AS ad_id,
             CAST(ad_group_id AS STRING) AS ad_group_id,
             headline,
-            description,
             final_url,
+            status,
             start_date,
             end_date
         FROM `{PROJECT_ID}.{DATASET_ID}.ads`
@@ -427,7 +435,7 @@ def migrate_ads_schema():
 
         client.query(query, job_config=job_config).result()
 
-        client.delete_table(table_ref)
+        client.delete_table(table_ref, not_found_ok=True)
         client.create_table(bigquery.Table(table_ref, schema=new_schema))
         client.copy_table(temp_table_ref, table_ref)
         client.delete_table(temp_table_ref)
