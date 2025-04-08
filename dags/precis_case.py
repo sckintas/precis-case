@@ -426,7 +426,7 @@ def migrate_metrics_table_schema():
             impressions,
             clicks,
             ctr,
-            average_cpc,
+            CAST(average_cpc AS FLOAT64) AS average_cpc,
             cost_micros,
             conversions
         FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
