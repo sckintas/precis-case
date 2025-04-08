@@ -52,6 +52,7 @@ TABLE_SCHEMAS = {
         {"name": "bidding_strategy_type", "type": "STRING"},
         {"name": "date", "type": "DATE"}
     ],
+
     "ad_groups": [
         {"name": "ad_group_id", "type": "STRING"},
         {"name": "campaign_id", "type": "STRING"},
@@ -230,7 +231,7 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
             for item in data:
                 item["campaign_id"] = item.get("id", item.get("campaign_id"))
                 item["campaign_name"] = item.get("name", item.get("campaign_name"))
-        
+
         # Normalize field names for metrics
         if "metrics" in url:
             if isinstance(data, dict) and 'metrics' in data:
