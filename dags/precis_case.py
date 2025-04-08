@@ -377,7 +377,7 @@ def migrate_metrics_table_schema():
         # Query to transform data during migration
         query = f"""
         SELECT 
-            CAST(campaign_id AS STRING) AS campaign_id,
+            CAST(COALESCE(campaign_id, '') AS STRING) AS campaign_id,
             CAST(COALESCE(ad_group_id, '') AS STRING) AS ad_group_id,
             CAST(COALESCE(ad_id, '') AS STRING) AS ad_id,
             date,
@@ -388,6 +388,7 @@ def migrate_metrics_table_schema():
             cost_micros,
             conversions
         FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
+
         """
 
         job_config = bigquery.QueryJobConfig(
