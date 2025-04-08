@@ -691,10 +691,11 @@ with DAG(
         )
 
         migrate_campaigns_schema_task = PythonOperator(
-            task_id="migrate_campaigns_schema",
-            python_callable=migrate_campaigns_schema,
-            execution_timeout=timedelta(minutes=10)
-        )
+        task_id="migrate_campaigns_schema",
+        python_callable=migrate_campaign_table_schema,  # ✅ Correct function name
+        execution_timeout=timedelta(minutes=10)
+     )
+
 
     # ✅ Extract/load tasks
     extract_load_campaigns = PythonOperator(
