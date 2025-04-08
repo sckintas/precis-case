@@ -77,12 +77,10 @@ TABLE_SCHEMAS = {
         {"name": "conversions", "type": "FLOAT"}
     ],
     "budgets": [
-        {"name": "campaign_id", "type": "INTEGER"},
-        {"name": "start_date", "type": "DATE"},
-        {"name": "end_date", "type": "DATE"},
-        {"name": "budget_amount", "type": "FLOAT"},
-        {"name": "budget_status", "type": "STRING"}
-    ]
+    {"name": "campaign_id", "type": "STRING"},
+    {"name": "budget_amount", "type": "FLOAT"}
+]
+
 }
 
 # Partitioning fields
@@ -100,7 +98,7 @@ REQUIRED_FIELDS = {
     "ad_groups": ["ad_group_id", "campaign_id"],
     "ads": ["ad_id", "ad_group_id"],
     "metrics": ["date", "campaign_id"],
-    "budgets": ["campaign_id", "start_date"]
+    "budgets": ["campaign_id"]
 }
 
 def log_pipeline_metadata(
@@ -188,6 +186,15 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
             for item in data:
                 if 'id' in item and 'ad_id' not in item:
                     item['ad_id'] = item.pop('id')
+        
+        if "budgets" in url:
+            if isinstance(data, dict) and 'budgets' in data:
+                data = data['budgets']
+
+            for item in data:
+                # Convert micros to float dollars
+                item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
+
 
                     
         return pd.DataFrame(data)
@@ -423,6 +430,38 @@ def migrate_ads_schema():
         logger.error(f"❌ Failed to migrate ads schema: {str(e)}")
         raise
 
+def migrate_budgets_schema():
+    """Migrate budgets table schema to accept STRING campaign_id and budget_amount."""
+    table_ref = client.dataset(DATASET_ID).table("budgets")
+    try:
+        new_schema = [
+            bigquery.SchemaField("campaign_id", "STRING"),
+            bigquery.SchemaField("budget_amount", "FLOAT")
+        ]
+
+        temp_table_ref = client.dataset(DATASET_ID).table("budgets_temp")
+        client.create_table(bigquery.Table(temp_table_ref, schema=new_schema))
+
+        query = f"""
+        SELECT 
+            CAST(campaign_id AS STRING) AS campaign_id,
+            budget_amount
+        FROM `{PROJECT_ID}.{DATASET_ID}.budgets`
+        """
+        job_config = bigquery.QueryJobConfig(destination=temp_table_ref, write_disposition="WRITE_TRUNCATE")
+        client.query(query, job_config=job_config).result()
+
+        client.delete_table(table_ref)
+        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        client.copy_table(temp_table_ref, table_ref)
+        client.delete_table(temp_table_ref)
+
+        logger.info("✅ Successfully migrated budgets table schema")
+
+    except Exception as e:
+        logger.error(f"❌ Failed to migrate budgets schema: {str(e)}")
+        raise
+
 
 def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
@@ -592,6 +631,12 @@ with DAG(
         migrate_ads_schema_task = PythonOperator(
             task_id="migrate_ads_schema",
             python_callable=migrate_ads_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
+
+        migrate_budgets_schema_task = PythonOperator(
+            task_id="migrate_budgets_schema",
+            python_callable=migrate_budgets_schema,
             execution_timeout=timedelta(minutes=10)
         )
 
