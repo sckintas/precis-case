@@ -585,7 +585,7 @@ def migrate_budgets_schema():
         raise
 
 
-def migrate_campaign_table_schema():
+def migrate_campaigns_schema():
     """Migrate the campaigns table schema to include new fields."""
     table_ref = client.dataset(DATASET_ID).table("campaigns")
     temp_table_ref = client.dataset(DATASET_ID).table("campaigns_temp")
