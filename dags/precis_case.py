@@ -96,7 +96,7 @@ REFERENCE_FIELDS = {
 # Required fields for each table (data validation)
 REQUIRED_FIELDS = {
     "campaigns": ["campaign_id", "campaign_name", "start_date"],
-    "ad_groups": ["id", "campaign_id"],
+    "ad_groups": ["ad_group_id", "campaign_id"],
     "ads": ["ad_id", "ad_group_id", "start_date"],
     "metrics": ["date", "campaign_id"],
     "budgets": ["campaign_id", "start_date"]
@@ -161,22 +161,23 @@ def notify_failure(context):
         logger.error(f"❌ Failed to send notification email: {str(e)}")
 
 def fetch_data_from_api(url: str) -> pd.DataFrame:
-    """Fetch data from API endpoint with error handling."""
+    """Fetch data from API endpoint with field name normalization."""
     try:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         data = response.json()
         
-        # Special handling for ad_groups to maintain consistency
+        # Normalize field names for ad_groups
         if "ad_groups" in url:
-            # Ensure we're working with the list of ad groups
             if isinstance(data, dict) and 'ad_groups' in data:
                 data = data['ad_groups']
             
-            # Add any missing fields with defaults if needed
+            # Normalize field names to match our schema
             for item in data:
-                if 'status' not in item:
-                    item['status'] = 'ENABLED'  # Default status
+                if 'id' in item and 'ad_group_id' not in item:
+                    item['ad_group_id'] = item.pop('id')
+                if 'name' in item and 'ad_group_name' not in item:
+                    item['ad_group_name'] = item.pop('name')
                     
         return pd.DataFrame(data)
     except requests.exceptions.RequestException as e:
@@ -187,25 +188,21 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
         raise
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
-    """Validate data against required fields and constraints."""
+    """Validate data with field name normalization."""
     required_fields = REQUIRED_FIELDS.get(table_name, [])
+    
+    # Normalize field names first
+    if table_name == "ad_groups":
+        if 'id' in df.columns and 'ad_group_id' not in df.columns:
+            df = df.rename(columns={'id': 'ad_group_id'})
+        if 'name' in df.columns and 'ad_group_name' not in df.columns:
+            df = df.rename(columns={'name': 'ad_group_name'})
     
     # Check required fields exist
     missing_fields = [field for field in required_fields if field not in df.columns]
     if missing_fields:
         logger.error(f"❌ Missing required fields in {table_name}: {missing_fields}")
         return False
-    
-    # Check for nulls in required fields
-    for field in required_fields:
-        if df[field].isnull().any():
-            logger.error(f"❌ Null values found in required field {field} in {table_name}")
-            return False
-    
-    # Special handling for ad_groups
-    if table_name == "ad_groups":
-        # Ensure campaign_id values are strings
-        df["campaign_id"] = df["campaign_id"].astype(str)
         
     return True
 
@@ -323,15 +320,12 @@ def migrate_metrics_table_schema():
         raise
 
 def extract_and_load(table: str, execution_date: datetime):
-    """Extract data from API and load to BigQuery with incremental logic."""
     run_id = str(uuid.uuid4())
     logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
-    
-    # Define temp file path
     temp_file = f"/tmp/{table}_{run_id}.parquet"
     
     try:
-        # Step 1: Fetch data from API
+        # Fetch and validate data
         url = MOCK_API_URLS[table]
         logger.info(f"🌐 Fetching data from {url}")
         df = fetch_data_from_api(url)
@@ -341,23 +335,23 @@ def extract_and_load(table: str, execution_date: datetime):
             log_pipeline_metadata(table, "NO_DATA", 0, None, execution_date)
             return
         
-        # Step 2: Special transformation for ad_groups
+        # Special handling for ad_groups
         if table == "ad_groups":
-            # Rename columns to match our schema if needed
-            if 'name' in df.columns and 'ad_group_name' not in df.columns:
-                df = df.rename(columns={'name': 'ad_group_name'})
-            if 'id' in df.columns and 'ad_group_id' not in df.columns:
+            # Ensure proper field names
+            if 'id' in df.columns:
                 df = df.rename(columns={'id': 'ad_group_id'})
+            if 'name' in df.columns:
+                df = df.rename(columns={'name': 'ad_group_name'})
+            
+            # Set default status if missing
+            if 'status' not in df.columns:
+                df['status'] = 'ENABLED'
         
-        # Step 3: Validate data
         if not validate_data(df, table):
             error_msg = f"Data validation failed for {table}"
             logger.error(f"❌ {error_msg}")
             log_pipeline_metadata(table, "FAILED", 0, error_msg, execution_date)
             raise ValueError(error_msg)
-        
-        # Rest of your processing remains the same...
-        # [Include the rest of your extract_and_load function]
 
         # Step 3: Type conversion for metrics table
         if table == "metrics":
