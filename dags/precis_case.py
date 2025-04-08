@@ -47,11 +47,12 @@ TABLE_SCHEMAS = {
         {"name": "campaign_id", "type": "STRING"},
         {"name": "campaign_name", "type": "STRING"},
         {"name": "status", "type": "STRING"},
-        {"name": "optimization_score", "type": "FLOAT"},
         {"name": "advertising_channel_type", "type": "STRING"},
         {"name": "bidding_strategy_type", "type": "STRING"},
+        {"name": "budget_id", "type": "STRING"},
         {"name": "date", "type": "DATE"}
     ],
+
 
     "ad_groups": [
         {"name": "ad_group_id", "type": "STRING"},
@@ -225,12 +226,15 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
         raise
 
         # Normalize field names for campaigns
+                # Normalize field names for campaigns
         if "campaigns" in url:
             if isinstance(data, dict) and 'campaigns' in data:
                 data = data['campaigns']
             for item in data:
-                item["campaign_id"] = item.get("id", item.get("campaign_id"))
-                item["campaign_name"] = item.get("name", item.get("campaign_name"))
+                if 'id' in item and 'campaign_id' not in item:
+                    item["campaign_id"] = item["id"]
+                if 'name' in item and 'campaign_name' not in item:
+                    item["campaign_name"] = item["name"]
 
         # Normalize field names for metrics
         if "metrics" in url:
