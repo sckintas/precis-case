@@ -103,6 +103,52 @@ REQUIRED_FIELDS = {
     "budgets": ["campaign_id", "date"]
 }
 
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.operators.bash import BashOperator
+from airflow.models import Variable
+from airflow.utils.email import send_email
+from google.cloud import bigquery
+from datetime import datetime, timedelta
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import requests
+import uuid
+import os
+import logging
+import json
+from typing import Dict, List, Optional
+import tempfile
+from airflow.utils.task_group import TaskGroup
+
+
+# Logger configuration
+logger = logging.getLogger("airflow")
+logger.setLevel(logging.INFO)
+
+# Variables from Airflow UI
+PROJECT_ID = Variable.get("GCP_PROJECT_ID")
+DATASET_ID = Variable.get("DATASET_ID")
+BQ_REGION = Variable.get("BQ_REGION", default_var="us")
+ALERT_EMAILS = Variable.get("ALERT_EMAILS", default_var="").split(",")
+
+# BigQuery client
+client = bigquery.Client(project=PROJECT_ID)
+
+# Metadata table for logging
+METADATA_TABLE = f"{PROJECT_ID}.{DATASET_ID}.pipeline_metadata"
+
+# GitHub-hosted mock JSON endpoints
+MOCK_API_URLS = {
+    "campaigns": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/campaigns.json",
+    "ad_groups": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ad_groups.json",
+    "ads": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ads.json",
+    "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
+    "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
+}
+
+
 def log_pipeline_metadata(
     table_name: str,
     status: str,
@@ -119,7 +165,7 @@ def log_pipeline_metadata(
             exec_date = datetime.utcnow()
     else:
         exec_date = execution_date or datetime.utcnow()
-
+    
     metadata = {
         "run_id": str(uuid.uuid4()),
         "table_name": table_name,
@@ -129,7 +175,7 @@ def log_pipeline_metadata(
         "error_message": error_message,
         "timestamp": datetime.utcnow().isoformat()
     }
-
+    
     try:
         errors = client.insert_rows_json(METADATA_TABLE, [metadata])
         if errors:
@@ -141,7 +187,7 @@ def notify_failure(context):
     """Send email notification on task failure."""
     task_instance = context.get('task_instance')
     execution_date = context.get('execution_date')
-
+    
     subject = f"Airflow Alert: Failed Task in DAG {task_instance.dag_id}"
     body = f"""
     <h3>Task Failed</h3>
@@ -152,7 +198,7 @@ def notify_failure(context):
         <li><b>Log URL:</b> <a href="{task_instance.log_url}">{task_instance.log_url}</a></li>
     </ul>
     """
-
+    
     try:
         for email in ALERT_EMAILS:
             if email.strip():
@@ -161,50 +207,56 @@ def notify_failure(context):
     except Exception as e:
         logger.error(f"❌ Failed to send notification email: {str(e)}")
 
-def fetch_data_from_file(path: str) -> pd.DataFrame:
-    """Load data from local JSON file and normalize fields."""
+def fetch_data_from_api(url: str) -> pd.DataFrame:
+    """Fetch data from API endpoint with field name normalization."""
     try:
-        with open(path, "r") as f:
-            data = json.load(f)
-
-        # Normalize structure if it's nested
-        table_name = os.path.basename(path).split(".")[0]  # e.g., campaigns.json -> campaigns
-
-        if isinstance(data, dict) and table_name in data:
-            data = data[table_name]
-
-        for item in data:
-            # Normalize ad_groups
-            if table_name == "ad_groups":
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Normalize field names for ad_groups
+        if "ad_groups" in url:
+            if isinstance(data, dict) and 'ad_groups' in data:
+                data = data['ad_groups']
+            
+            # Normalize field names to match our schema
+            for item in data:
                 if 'id' in item and 'ad_group_id' not in item:
                     item['ad_group_id'] = item.pop('id')
                 if 'name' in item and 'ad_group_name' not in item:
                     item['ad_group_name'] = item.pop('name')
 
-            # Normalize ads
-            if table_name == "ads":
+        # Normalize field names for ads
+        if "ads" in url:
+            if isinstance(data, dict) and 'ads' in data:
+                data = data['ads']
+
+            for item in data:
                 if 'id' in item and 'ad_id' not in item:
                     item['ad_id'] = item.pop('id')
+        
+        if "budgets" in url:
+            if isinstance(data, dict) and 'budgets' in data:
+                data = data['budgets']
 
-            # Normalize campaigns
-            if table_name == "campaigns":
-                item["campaign_id"] = str(item.get("id", item.get("campaign_id", "")))
-                item["campaign_name"] = item.get("name", item.get("campaign_name", ""))
-
-            # Normalize budgets
-            if table_name == "budgets":
+            for item in data:
+                # Convert micros to float dollars
                 item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
 
-            # Normalize metrics
-            if table_name == "metrics":
-                for field in ["campaign_id", "ad_group_id", "ad_id"]:
-                    if field in item:
-                        item[field] = str(item[field])
+        if "campaigns" in url:
+            if isinstance(data, dict) and 'campaigns' in data:
+                data = data['campaigns']
+            for item in data:
+                item["campaign_id"] = item.get("id", item.get("campaign_id"))
+                item["campaign_name"] = item.get("name", item.get("campaign_name"))
 
+                    
         return pd.DataFrame(data)
-
-    except Exception as e:
-        logger.error(f"❌ Failed to load or process data from {path}: {str(e)}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
+        raise
+    except ValueError as e:
+        logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
         raise
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
@@ -574,48 +626,39 @@ def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
     logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
     temp_file = f"/tmp/{table}_{run_id}.parquet"
-
+    
     try:
         # Fetch and validate data
-        url = MOCK_API_URLS[table]
+        url = MOCK_API_URLS.get(table)  # Fetch the URL for the table
+        if not url:
+            raise ValueError(f"❌ No URL found for table: {table}")
+        
         logger.info(f"🌐 Fetching data from {url}")
-        df = fetch_data_from_api(url)
-
+        df = fetch_data_from_api(url)  # Use the fetch_data_from_api function
+        
         if df.empty:
             logger.info(f"⚠️ No data returned for {table}")
             log_pipeline_metadata(table, "NO_DATA", 0, None, execution_date)
             return
 
-        # Normalize IDs and names as needed
-        if table == "ad_groups":
-            df.rename(columns={"id": "ad_group_id", "name": "ad_group_name"}, inplace=True)
-            df["status"] = df.get("status", "ENABLED")
-
-        if table == "ads":
-            df.rename(columns={"id": "ad_id"}, inplace=True)
-
-        if table == "campaigns":
-            df["campaign_id"] = df.get("id", df.get("campaign_id", "")).astype(str)
-            df["campaign_name"] = df.get("name", df.get("campaign_name", ""))
-
-        if table == "budgets":
-            df["budget_id"] = df.get("id", df.get("budget_id", "")).astype(str)
-            df["budget_amount"] = df.get("amount_micros", 0) / 1_000_000
-
-        if table == "metrics":
-            df["campaign_id"] = df.get("campaign_id", "").astype(str)
-            df["ad_group_id"] = df.get("ad_group_id", "").astype(str)
-            df["ad_id"] = df.get("ad_id", "").astype(str)
-
+        # Additional data processing for specific tables if needed
+        # Ensure data validation, incremental logic, and conversion happens here
         if not validate_data(df, table):
             msg = f"Data validation failed for {table}"
             logger.error(f"❌ {msg}")
             log_pipeline_metadata(table, "FAILED", 0, msg, execution_date)
             raise ValueError(msg)
 
-        # Apply incremental logic
+        # Step 3: Type conversion for metrics table
+        if table == "metrics":
+            df["campaign_id"] = df["campaign_id"].astype(str)
+            for id_field in ["ad_group_id", "ad_id"]:
+                if id_field in df.columns:
+                    df[id_field] = df[id_field].astype(str)
+
+        # Step 4: Apply incremental logic
         date_field = REFERENCE_FIELDS.get(table)
-        if date_field in df.columns:
+        if date_field and date_field in df.columns:
             latest_date = get_latest_date(table)
             if latest_date:
                 df[date_field] = pd.to_datetime(df[date_field])
@@ -627,13 +670,14 @@ def extract_and_load(table: str, execution_date: datetime):
             log_pipeline_metadata(table, "NO_NEW_DATA", 0, None, execution_date)
             return
 
-        # Format date fields
-        for col in df.columns:
-            if "date" in col.lower():
-                df[col] = pd.to_datetime(df[col]).dt.date
+        # Convert date fields to proper format
+        for field in df.columns:
+            if "date" in field.lower():
+                df[field] = pd.to_datetime(df[field]).dt.date
 
         pq.write_table(pa.Table.from_pandas(df), temp_file)
 
+        # Step 6: Load to BigQuery
         job_config = bigquery.LoadJobConfig(
             source_format=bigquery.SourceFormat.PARQUET,
             write_disposition="WRITE_APPEND",
