@@ -473,31 +473,27 @@ def migrate_ads_schema():
 
 
 def migrate_budgets_schema():
-    """Migrate budgets table schema to include budget_id, budget_amount, and date."""
+    """Migrate budgets table schema to standard format with budget_id, budget_amount, and date."""
     table_ref = client.dataset(DATASET_ID).table("budgets")
     temp_table_ref = client.dataset(DATASET_ID).table("budgets_temp")
 
     try:
-        # Drop temp table if it already exists
         client.delete_table(temp_table_ref, not_found_ok=True)
         logger.info("🧹 Deleted existing budgets_temp table")
 
-        # Define new schema
         new_schema = [
             bigquery.SchemaField("budget_id", "STRING"),
             bigquery.SchemaField("budget_amount", "FLOAT"),
             bigquery.SchemaField("date", "DATE")
         ]
 
-        # Create temp table
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
-        # Query from old table
         query = f"""
         SELECT 
-            CAST(id AS STRING) AS budget_id,
-            SAFE_DIVIDE(amount_micros, 1000000.0) AS budget_amount,
+            budget_id,
+            budget_amount,
             date
         FROM `{PROJECT_ID}.{DATASET_ID}.budgets`
         """
@@ -506,9 +502,9 @@ def migrate_budgets_schema():
             destination=temp_table_ref,
             write_disposition="WRITE_TRUNCATE"
         )
+
         client.query(query, job_config=job_config).result()
 
-        # Replace original table
         client.delete_table(table_ref, not_found_ok=True)
         client.create_table(bigquery.Table(table_ref, schema=new_schema))
         client.copy_table(temp_table_ref, table_ref)
