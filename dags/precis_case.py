@@ -379,15 +379,19 @@ def extract_and_load(table: str, execution_date: datetime):
         
         # Special handling for ad_groups
         if table == "ad_groups":
-            # Ensure proper field names
             if 'id' in df.columns:
                 df = df.rename(columns={'id': 'ad_group_id'})
             if 'name' in df.columns:
                 df = df.rename(columns={'name': 'ad_group_name'})
-            
-            # Set default status if missing
             if 'status' not in df.columns:
                 df['status'] = 'ENABLED'
+
+            # 🔧 Cast to integer to match existing schema
+            df['ad_group_id'] = df['ad_group_id'].astype(int)
+            df['campaign_id'] = df['campaign_id'].astype(int)
+
+
+
         
         if not validate_data(df, table):
             error_msg = f"Data validation failed for {table}"
