@@ -45,7 +45,7 @@ MOCK_API_URLS = {
 # Schema definitions for each table
 TABLE_SCHEMAS = {
     "campaigns": [
-        {"name": "campaign_id", "type": "STRING"},
+        {"name": "campaign_id", "type": "STRING"},  # Ensure this is STRING
         {"name": "campaign_name", "type": "STRING"},
         {"name": "status", "type": "STRING"},
         {"name": "optimization_score", "type": "FLOAT"},
@@ -198,9 +198,11 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
         if "campaigns" in url:
             if isinstance(data, dict) and 'campaigns' in data:
                 data = data['campaigns']
+            
+            # Ensure campaign_id is string and handle field names
             for item in data:
-                item["campaign_id"] = item.get("id", item.get("campaign_id"))
-                item["campaign_name"] = item.get("name", item.get("campaign_name"))
+                item["campaign_id"] = str(item.get("id", item.get("campaign_id", "")))
+                item["campaign_name"] = item.get("name", item.get("campaign_name", ""))
 
                     
         return pd.DataFrame(data)
