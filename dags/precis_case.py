@@ -574,11 +574,27 @@ def log_pipeline_metadata(
     status: str,
     rows_processed: int = 0,
     error_message: Optional[str] = None,
-    execution_date: Optional[datetime] = None
+    execution_date: Optional[Union[datetime, str]] = None
 ):
     """Log pipeline execution metadata to BigQuery."""
-    # Handle execution_date
-    exec_date = execution_date or datetime.utcnow()
+    
+    # Handle execution_date conversion
+    exec_date = None
+    if isinstance(execution_date, str):
+        try:
+            # Try parsing ISO format string
+            exec_date = datetime.fromisoformat(execution_date)
+        except ValueError:
+            try:
+                # Try parsing Airflow's log format
+                exec_date = datetime.strptime(execution_date, "%Y-%m-%dT%H:%M:%S%z")
+            except ValueError:
+                # Fall back to current time if parsing fails
+                exec_date = datetime.utcnow()
+    elif isinstance(execution_date, datetime):
+        exec_date = execution_date
+    else:
+        exec_date = datetime.utcnow()
 
     metadata = {
         "run_id": str(uuid.uuid4()),
@@ -1079,12 +1095,12 @@ with DAG(
     )
 
     extract_load_metrics = PythonOperator(
-        task_id="extract_load_metrics",
-        python_callable=extract_and_load,
-        op_kwargs={"table": "metrics", "execution_date": "{{ execution_date }}"},
-        execution_timeout=timedelta(minutes=30),
-        retries=1
-    )
+    task_id="extract_load_metrics",
+    python_callable=extract_and_load,
+    op_kwargs={"table": "metrics", "execution_date": "{{ execution_date.isoformat() }}"},
+    execution_timeout=timedelta(minutes=30),
+    retries=1
+)
 
     extract_load_budgets = PythonOperator(
         task_id="extract_load_budgets",
