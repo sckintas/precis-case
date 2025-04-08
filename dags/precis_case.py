@@ -334,50 +334,77 @@ def create_bigquery_tables():
 
         try:
             existing_table = client.get_table(table_ref)
-            
-            # Schema evolution handling
-            existing_fields = {field.name: field for field in existing_table.schema}
-            new_fields = {field["name"]: field["type"] for field in schema_def}
-            
-            # Detect schema changes
-            added_fields = []
-            changed_fields = []
-            
-            for field_name, field_type in new_fields.items():
-                if field_name not in existing_fields:
-                    added_fields.append(field_name)
-                elif existing_fields[field_name].field_type != field_type:
-                    changed_fields.append(field_name)
-
-            if added_fields or changed_fields:
-                logger.info(f"🔧 Schema changes detected in {table_name}: "
-                          f"{len(added_fields)} added, {len(changed_fields)} changed")
+            if existing_table.time_partitioning is None:
+                # Create new partitioned table and copy data
+                logger.info(f"🔄 Creating new partitioned table for {table_name}")
                 
-                # Build updated schema
-                updated_schema = []
-                for field in schema_def:
-                    field_name = field["name"]
-                    if field_name in existing_fields:
-                        # Preserve existing field attributes
-                        updated_schema.append(existing_fields[field_name])
-                    else:
-                        # Add new field
-                        updated_schema.append(bigquery.SchemaField(field_name, field["type"]))
-
-                # Apply updates
-                table = bigquery.Table(table_ref, schema=updated_schema)
-                
-                # Maintain partitioning and clustering
+                # Create new partitioned table
+                table = bigquery.Table(table_ref, schema=schema)
                 if partitioning:
                     table.time_partitioning = partitioning
                 if clustering_fields:
                     table.clustering_fields = clustering_fields
                 
-                # Update expiration
                 table.expires = datetime.utcnow() + EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"])
+                client.create_table(table)
+                logger.info(f"✅ Created new partitioned table {table_name}")
+
+                # Copy data from the old table to the new one
+                copy_job = client.copy_table(
+                    existing_table,
+                    table_ref
+                )
+                copy_job.result()  # Wait for completion
+                logger.info(f"✅ Copied data to the new partitioned table {table_name}")
+
+                # Delete the old table
+                client.delete_table(existing_table)
+                logger.info(f"🧹 Deleted old table {table_name}")
+
+            else:
+                # Schema evolution handling
+                existing_fields = {field.name: field for field in existing_table.schema}
+                new_fields = {field["name"]: field["type"] for field in schema_def}
                 
-                client.update_table(table, ["schema", "time_partitioning", "clustering_fields", "expires"])
-                logger.info(f"🔄 Updated schema for {table_name}")
+                # Detect schema changes
+                added_fields = []
+                changed_fields = []
+                
+                for field_name, field_type in new_fields.items():
+                    if field_name not in existing_fields:
+                        added_fields.append(field_name)
+                    elif existing_fields[field_name].field_type != field_type:
+                        changed_fields.append(field_name)
+
+                if added_fields or changed_fields:
+                    logger.info(f"🔧 Schema changes detected in {table_name}: "
+                              f"{len(added_fields)} added, {len(changed_fields)} changed")
+                    
+                    # Build updated schema
+                    updated_schema = []
+                    for field in schema_def:
+                        field_name = field["name"]
+                        if field_name in existing_fields:
+                            # Preserve existing field attributes
+                            updated_schema.append(existing_fields[field_name])
+                        else:
+                            # Add new field
+                            updated_schema.append(bigquery.SchemaField(field_name, field["type"]))
+
+                    # Apply updates
+                    table = bigquery.Table(table_ref, schema=updated_schema)
+                    
+                    # Maintain partitioning and clustering
+                    if partitioning:
+                        table.time_partitioning = partitioning
+                    if clustering_fields:
+                        table.clustering_fields = clustering_fields
+                    
+                    # Update expiration
+                    table.expires = datetime.utcnow() + EXPIRATION_CONFIG.get(table_name, EXPIRATION_CONFIG["*"])
+                    
+                    client.update_table(table, ["schema", "time_partitioning", "clustering_fields", "expires"])
+                    logger.info(f"🔄 Updated schema for {table_name}")
 
             logger.info(f"✅ Table {table_name} already exists")
 
