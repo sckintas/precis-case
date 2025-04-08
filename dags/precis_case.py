@@ -390,11 +390,17 @@ def create_bigquery_tables():
 def migrate_metrics_table_schema():
     """Migrate the metrics table schema to accept string IDs and updated fields."""
     table_ref = client.dataset(DATASET_ID).table("metrics")
+    temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
 
     try:
-        table = client.get_table(table_ref)
+        # First check if the table exists
+        try:
+            table = client.get_table(table_ref)
+        except Exception:
+            logger.info("Metrics table doesn't exist yet, no migration needed")
+            return
 
-        # Build updated schema
+        # Build new schema with correct types
         new_schema = [
             bigquery.SchemaField("campaign_id", "STRING"),
             bigquery.SchemaField("ad_group_id", "STRING"),
@@ -408,20 +414,17 @@ def migrate_metrics_table_schema():
             bigquery.SchemaField("conversions", "FLOAT")
         ]
 
-        temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
+        # Create temp table with new schema
+        client.delete_table(temp_table_ref, not_found_ok=True)
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
+        # Query to transform data during migration
         query = f"""
         SELECT 
             CAST(campaign_id AS STRING) AS campaign_id,
-            CAST(ad_group_id AS STRING) AS ad_group_id,
-            CAST(ad_id AS STRING) AS ad_id,
+            CAST(COALESCE(ad_group_id, '') AS STRING) AS ad_group_id,
+            CAST(COALESCE(ad_id, '') AS STRING) AS ad_id,
             date,
             impressions,
             clicks,
@@ -432,8 +435,16 @@ def migrate_metrics_table_schema():
         FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
         """
 
-        client.query(query, job_config=job_config).result()
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref,
+            write_disposition="WRITE_TRUNCATE"
+        )
 
+        # Execute the migration
+        query_job = client.query(query, job_config=job_config)
+        query_job.result()  # Wait for completion
+
+        # Replace the old table with the new one
         client.delete_table(table_ref)
         client.create_table(bigquery.Table(table_ref, schema=new_schema))
         client.copy_table(temp_table_ref, table_ref)
@@ -444,7 +455,6 @@ def migrate_metrics_table_schema():
     except Exception as e:
         logger.error(f"❌ Failed to migrate metrics schema: {str(e)}")
         raise
-
 
 # The rest of the code remains unchanged
 
@@ -669,12 +679,16 @@ def extract_and_load(table: str, execution_date: datetime):
 
         # Step 2: Apply data type conversions as needed
         if table == "metrics":
-            # Ensure 'conversions' is treated as FLOAT
-            df["conversions"] = df["conversions"].astype(float, errors='ignore')  # Convert to float if possible
+            # Ensure proper data types
             df["campaign_id"] = df["campaign_id"].astype(str)
-            for id_field in ["ad_group_id", "ad_id"]:
-                if id_field in df.columns:
-                    df[id_field] = df[id_field].astype(str)
+            if "ad_group_id" in df.columns:
+                df["ad_group_id"] = df["ad_group_id"].astype(str)
+            if "ad_id" in df.columns:
+                df["ad_id"] = df["ad_id"].astype(str)
+            if "average_cpc" in df.columns:
+                df["average_cpc"] = df["average_cpc"].astype(float)
+            if "conversions" in df.columns:
+                df["conversions"] = df["conversions"].astype(float)
 
         # Step 3: Apply incremental logic
         date_field = REFERENCE_FIELDS.get(table)
@@ -864,9 +878,8 @@ with DAG(
     )
 
     # ✅ DAG dependencies
-    init_tables >> schema_migrations
-
-    schema_migrations >> [
+    # In your DAG definition, modify the dependencies:
+    init_tables >> schema_migrations >> [
         extract_load_campaigns,
         extract_load_ad_groups,
         extract_load_ads,
