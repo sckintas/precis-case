@@ -409,8 +409,9 @@ def filter_incremental_data(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
     logger.info(f"Row count after filtering for new data: {len(df)}")
     return df
 
+
 def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
-    """Load data into BigQuery with proper partitioning and clustering."""
+    """Load data into BigQuery with partitioning and clustering."""
     table_ref = client.dataset(DATASET_ID).table(table_name)
     
     try:
@@ -426,7 +427,7 @@ def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
         write_disposition="WRITE_APPEND",
-        schema_update_options=[
+        schema_update_options=[  # Allow schema updates if needed
             bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
             bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION
         ]
@@ -452,7 +453,8 @@ def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
         job.result()
 
     os.remove(temp_file)
-    logger.info(f"✅ Successfully loaded data to {table_name} with partitioning")
+    logger.info(f"✅ Successfully loaded data to {table_name} with partitioning and clustering")
+
 
 def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
