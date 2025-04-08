@@ -274,6 +274,7 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 def create_bigquery_tables():
     """Create BigQuery tables with optimized schemas, partitioning, clustering, and cost controls."""
+    
     # Define optimal clustering configurations per table
     CLUSTERING_CONFIG = {
         "campaigns": ["campaign_id", "status"],
@@ -286,7 +287,7 @@ def create_bigquery_tables():
     # Define table expiration (90 days for metrics, 1 year for others)
     EXPIRATION_CONFIG = {
         "metrics": timedelta(days=90),
-        "*": timedelta(days=365)  # Default
+        "*": timedelta(days=365)  # Default expiration for other tables
     }
 
     # 1. Create/update metadata table
@@ -334,11 +335,12 @@ def create_bigquery_tables():
 
         try:
             existing_table = client.get_table(table_ref)
-            if existing_table.time_partitioning is None:
-                # Create new partitioned table and copy data
+            
+            # Check if the table is partitioned
+            if not existing_table.time_partitioning:
                 logger.info(f"🔄 Creating new partitioned table for {table_name}")
-                
-                # Create new partitioned table
+
+                # Create a new partitioned table (if it wasn't partitioned)
                 table = bigquery.Table(table_ref, schema=schema)
                 if partitioning:
                     table.time_partitioning = partitioning
@@ -349,11 +351,8 @@ def create_bigquery_tables():
                 client.create_table(table)
                 logger.info(f"✅ Created new partitioned table {table_name}")
 
-                # Copy data from the old table to the new one
-                copy_job = client.copy_table(
-                    existing_table,
-                    table_ref
-                )
+                # Copy data from the old table to the new partitioned table
+                copy_job = client.copy_table(existing_table, table_ref)
                 copy_job.result()  # Wait for completion
                 logger.info(f"✅ Copied data to the new partitioned table {table_name}")
 
@@ -434,125 +433,6 @@ def create_bigquery_tables():
     except Exception as e:
         logger.warning(f"⚠️ Could not create materialized views: {str(e)}")
 
-
-
-def migrate_metrics_table_schema():
-    """Migrate the metrics table schema to accept string IDs and updated fields."""
-    table_ref = client.dataset(DATASET_ID).table("metrics")
-    temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
-
-    try:
-        # First check if the table exists
-        try:
-            table = client.get_table(table_ref)
-        except Exception:
-            logger.info("Metrics table doesn't exist yet, no migration needed")
-            return
-
-        # Build new schema with correct types
-        new_schema = [
-            bigquery.SchemaField("campaign_id", "STRING"),
-            bigquery.SchemaField("ad_group_id", "STRING"),
-            bigquery.SchemaField("ad_id", "STRING"),
-            bigquery.SchemaField("date", "DATE"),
-            bigquery.SchemaField("impressions", "INTEGER"),
-            bigquery.SchemaField("clicks", "INTEGER"),
-            bigquery.SchemaField("ctr", "FLOAT"),
-            bigquery.SchemaField("average_cpc", "FLOAT"),
-            bigquery.SchemaField("cost_micros", "INTEGER"),
-            bigquery.SchemaField("conversions", "FLOAT")
-        ]
-
-        # Create temp table with new schema
-        client.delete_table(temp_table_ref, not_found_ok=True)
-        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
-        client.create_table(temp_table)
-
-        # Query to transform data during migration
-        query = f"""
-        SELECT 
-            CAST(COALESCE(ad_group_id, '') AS STRING) AS ad_group_id,
-            date,
-            impressions,
-            clicks,
-            ctr,
-            CAST(average_cpc AS FLOAT64) AS average_cpc,
-            cost_micros,
-            conversions
-        FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
-
-
-        """
-
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
-        # Execute the migration
-        query_job = client.query(query, job_config=job_config)
-        query_job.result()  # Wait for completion
-
-        # Replace the old table with the new one
-        client.delete_table(table_ref)
-        client.create_table(bigquery.Table(table_ref, schema=new_schema))
-        client.copy_table(temp_table_ref, table_ref)
-        client.delete_table(temp_table_ref)
-
-        logger.info("✅ Successfully migrated metrics table schema")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to migrate metrics schema: {str(e)}")
-        raise
-
-# The rest of the code remains unchanged
-
-
-def migrate_ad_groups_schema():
-    """Migrate the ad_groups table schema to STRING types and updated fields."""
-    table_ref = client.dataset(DATASET_ID).table("ad_groups")
-
-    try:
-        new_schema = [
-            bigquery.SchemaField("ad_group_id", "STRING"),
-            bigquery.SchemaField("campaign_id", "STRING"),
-            bigquery.SchemaField("ad_group_name", "STRING"),
-            bigquery.SchemaField("status", "STRING"),
-            bigquery.SchemaField("date", "DATE")
-        ]
-
-        temp_table_ref = client.dataset(DATASET_ID).table("ad_groups_temp")
-        client.delete_table(temp_table_ref, not_found_ok=True)
-        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
-        client.create_table(temp_table)
-
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
-        query = f"""
-        SELECT 
-            CAST(ad_group_id AS STRING) AS ad_group_id,
-            CAST(campaign_id AS STRING) AS campaign_id,
-            ad_group_name,
-            status,
-            date
-        FROM `{PROJECT_ID}.{DATASET_ID}.ad_groups`
-        """
-
-        client.query(query, job_config=job_config).result()
-
-        client.delete_table(table_ref, not_found_ok=True)
-        client.create_table(bigquery.Table(table_ref, schema=new_schema))
-        client.copy_table(temp_table_ref, table_ref)
-        client.delete_table(temp_table_ref)
-
-        logger.info("✅ Successfully migrated ad_groups table schema")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to migrate ad_groups schema: {str(e)}")
-        raise
 
 def migrate_ads_schema():
     """Migrate the ads table schema to STRING types and updated fields."""
