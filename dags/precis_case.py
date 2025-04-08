@@ -71,17 +71,15 @@ TABLE_SCHEMAS = {
 
 
     "metrics": [
-    {"name": "ad_group_id", "type": "STRING"},
-    {"name": "ad_group_id", "type": "STRING"},
-    {"name": "ad_id", "type": "STRING"},
-    {"name": "date", "type": "DATE"},
-    {"name": "impressions", "type": "INTEGER"},
-    {"name": "clicks", "type": "INTEGER"},
-    {"name": "ctr", "type": "FLOAT"},
-    {"name": "average_cpc", "type": "FLOAT"},  
-    {"name": "cost_micros", "type": "INTEGER"},
-    {"name": "conversions", "type": "FLOAT"}
-],
+        {"name": "ad_group_id", "type": "STRING"},
+        {"name": "date", "type": "DATE"},
+        {"name": "clicks", "type": "INTEGER"},
+        {"name": "impressions", "type": "INTEGER"},
+        {"name": "ctr", "type": "FLOAT"},
+        {"name": "average_cpc", "type": "FLOAT"},  # Changed from INTEGER to FLOAT
+        {"name": "cost_micros", "type": "INTEGER"},
+        {"name": "conversions", "type": "FLOAT"}
+    ],
     
     "budgets": [
         {"name": "budget_id", "type": "STRING"},
@@ -104,7 +102,7 @@ REQUIRED_FIELDS = {
     "campaigns": ["campaign_id", "campaign_name", "date"],
     "ad_groups": ["ad_group_id", "campaign_id", "date"],
     "ads": ["ad_id", "ad_group_id", "date"],
-    "metrics": ["date", "ad_group_id"],
+    "metrics": ["ad_group_id", "date"],
     "budgets": ["campaign_id", "date"]
 }
 
@@ -240,26 +238,16 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
         if "metrics" in url:
             if isinstance(data, dict) and 'metrics' in data:
                 data = data['metrics']
-
+            
+            # Ensure all records have required fields
             for item in data:
-                # Convert micro amounts to standard values
-                if 'average_cpc' in item:
-                    item['average_cpc'] = item['average_cpc'] / 1000000  # Convert micros to standard
-                
-                # Ensure all numeric fields are properly typed
-                numeric_fields = {
-                    'clicks': int,
-                    'impressions': int,
-                    'ctr': float,
-                    'cost_micros': int,
-                    'conversions': float
-                }
-                
-                for field, dtype in numeric_fields.items():
-                    if field in item and item[field] is not None:
-                        item[field] = dtype(item[field])
+                if 'ad_group_id' not in item:
+                    item['ad_group_id'] = 'unknown'  # Default value if missing
+                if 'date' not in item:
+                    item['date'] = datetime.now().strftime('%Y-%m-%d')  # Current date if missing
 
         return pd.DataFrame(data)
+    
     except requests.exceptions.RequestException as e:
         logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
         raise
@@ -669,16 +657,32 @@ def extract_and_load(table: str, execution_date: datetime):
 
         # Step 2: Apply data type conversions as needed
         if table == "metrics":
-            # Ensure proper data types
-            df["campaign_id"] = df["campaign_id"].astype(str)
-            if "ad_group_id" in df.columns:
-                df["ad_group_id"] = df["ad_group_id"].astype(str)
-            if "ad_id" in df.columns:
-                df["ad_id"] = df["ad_id"].astype(str)
-            if "average_cpc" in df.columns:
-                df["average_cpc"] = df["average_cpc"].astype(float)
-            if "conversions" in df.columns:
-                df["conversions"] = df["conversions"].astype(float)
+            # Ensure required fields exist
+            if 'ad_group_id' not in df.columns:
+                raise ValueError("Missing required field: ad_group_id")
+            if 'date' not in df.columns:
+                raise ValueError("Missing required field: date")
+            
+            # Convert data types
+            df['ad_group_id'] = df['ad_group_id'].astype(str)
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            
+            # Convert micro values
+            if 'average_cpc' in df.columns:
+                df['average_cpc'] = df['average_cpc'] / 1000000  # Convert to standard dollars
+            
+            # Ensure numeric fields are properly typed
+            numeric_fields = {
+                'clicks': 'int64',
+                'impressions': 'int64', 
+                'ctr': 'float64',
+                'cost_micros': 'int64',
+                'conversions': 'float64'
+            }
+            
+            for field, dtype in numeric_fields.items():
+                if field in df.columns:
+                    df[field] = pd.to_numeric(df[field], errors='coerce').fillna(0).astype(dtype)
 
         # Step 3: Apply incremental logic
         date_field = REFERENCE_FIELDS.get(table)
