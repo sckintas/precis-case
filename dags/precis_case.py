@@ -299,6 +299,23 @@ def create_bigquery_tables():
         table_ref = client.dataset(DATASET_ID).table(table_name)
         schema = [bigquery.SchemaField(field["name"], field["type"]) for field in schema_def]
 
+        # Partitioning field (if available)
+        partition_field = REFERENCE_FIELDS.get(table_name)
+        if partition_field:
+            partitioning = bigquery.TimePartitioning(
+                type_=bigquery.TimePartitioningType.DAY,
+                field=partition_field
+            )
+            logger.info(f"✅ Partitioning {table_name} on {partition_field}")
+        else:
+            partitioning = None
+
+        # Clustering fields (if any)
+        clustering_fields = [field["name"] for field in schema_def if field["name"] in ("campaign_id", "ad_group_id", "ad_id")]
+        if clustering_fields:
+            logger.info(f"✅ Clustering {table_name} on {clustering_fields}")
+
+        # Create or update table with partitioning and clustering if needed
         try:
             existing_table = client.get_table(table_ref)
 
@@ -315,31 +332,30 @@ def create_bigquery_tables():
                     for field in added_fields
                 ]
                 table = bigquery.Table(table_ref, schema=updated_schema)
-                client.update_table(table, ["schema"])
+                if partitioning:
+                    table.time_partitioning = partitioning
+                if clustering_fields:
+                    table.clustering_fields = clustering_fields
+                client.update_table(table, ["schema", "time_partitioning", "clustering_fields"])
                 logger.info(f"✅ Updated schema for {table_name}")
 
             logger.info(f"✅ Table {table_name} already exists")
 
         except Exception:
+            # Create new table if it doesn't exist
             table = bigquery.Table(table_ref, schema=schema)
 
             # Add partitioning if specified
-            partition_field = REFERENCE_FIELDS.get(table_name)
-            if partition_field and any(field.name == partition_field for field in schema):
-                table.time_partitioning = bigquery.TimePartitioning(
-                    type_=bigquery.TimePartitioningType.DAY,
-                    field=partition_field
-                )
-                logger.info(f"✅ Partitioning {table_name} on {partition_field}")
+            if partitioning:
+                table.time_partitioning = partitioning
 
-            # Add clustering on common ID fields
-            cluster_fields = [field["name"] for field in schema_def if field["name"] in ("campaign_id", "ad_group_id", "ad_id")]
-            if cluster_fields:
-                table.clustering_fields = cluster_fields
-                logger.info(f"✅ Clustering {table_name} on {cluster_fields}")
+            # Add clustering if specified
+            if clustering_fields:
+                table.clustering_fields = clustering_fields
 
             client.create_table(table)
             logger.info(f"✅ Created table {table_name}")
+
 
 
 def migrate_metrics_table_schema():
