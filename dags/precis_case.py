@@ -435,6 +435,160 @@ def create_bigquery_tables():
         logger.warning(f"⚠️ Could not create materialized views: {str(e)}")
 
 
+def validate_data(df: pd.DataFrame, table_name: str) -> bool:
+    """Validate the incoming data for missing fields and invalid values."""
+    required_fields = REQUIRED_FIELDS.get(table_name, [])
+
+    # Check for missing required fields
+    missing_fields = [field for field in required_fields if field not in df.columns]
+    if missing_fields:
+        logger.error(f"❌ Missing required fields in {table_name}: {missing_fields}")
+        return False
+
+    # Ensure no negative values for certain columns (e.g., clicks, cost)
+    if 'clicks' in df.columns and (df['clicks'] < 0).any():
+        logger.error("❌ Found negative values in 'clicks'.")
+        return False
+
+    # Add any additional validation checks for other fields here, if needed
+
+    return True
+
+
+
+def deduplicate_data(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
+    """Remove duplicate records based on key fields."""
+    logger.info(f"Initial row count before deduplication: {len(df)}")
+    
+    # Define unique keys for deduplication based on the table
+    if table_name == "campaigns":
+        df = df.drop_duplicates(subset=['campaign_id', 'date'])
+    elif table_name == "ad_groups":
+        df = df.drop_duplicates(subset=['ad_group_id', 'date'])
+    elif table_name == "ads":
+        df = df.drop_duplicates(subset=['ad_id', 'date'])
+    elif table_name == "metrics":
+        df = df.drop_duplicates(subset=['ad_group_id', 'date'])
+    elif table_name == "budgets":
+        df = df.drop_duplicates(subset=['budget_id', 'date'])
+    
+    logger.info(f"Row count after deduplication: {len(df)}")
+    return df
+
+
+
+def filter_incremental_data(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
+    """Filter the data to only include records after the latest date in BigQuery."""
+    latest_date = get_latest_date(table_name)
+    logger.info(f"Latest date in BigQuery for {table_name}: {latest_date}")
+
+    # Filter the data to only include records after the latest date
+    df['date'] = pd.to_datetime(df['date'])
+    df = df[df['date'] > pd.to_datetime(latest_date)]
+    
+    logger.info(f"Row count after filtering for new data: {len(df)}")
+    return df
+
+def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
+    """Load data into BigQuery and log the row count."""
+    # Define job config for loading data into BigQuery (e.g., write mode)
+    job_config = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.PARQUET,
+        write_disposition="WRITE_APPEND",  # Adjust based on your needs
+        schema_update_options=[
+            bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
+            bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION
+        ]
+    )
+
+    # Convert DataFrame to Parquet and upload to BigQuery
+    temp_file = f"/tmp/{table_name}.parquet"
+    pq.write_table(pa.Table.from_pandas(df), temp_file)
+
+    with open(temp_file, "rb") as f:
+        job = client.load_table_from_file(
+            f,
+            f"{PROJECT_ID}.{DATASET_ID}.{table_name}",
+            job_config=job_config
+        )
+        job.result()  # Wait for job to complete
+
+    # Query to get the row count in BigQuery
+    query = f"""
+    SELECT COUNT(*) as row_count
+    FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
+    """
+    query_job = client.query(query)
+    result = query_job.result()
+    row_count = [row for row in result][0]['row_count']
+    logger.info(f"Row count in BigQuery for table {table_name}: {row_count}")
+
+    # Clean up temporary file
+    os.remove(temp_file)
+
+def extract_and_load(table: str, execution_date: datetime):
+    run_id = str(uuid.uuid4())
+    logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
+    
+    try:
+        # Step 1: Fetch and validate data
+        url = MOCK_API_URLS.get(table)
+        df = fetch_data_from_api(url)
+        
+        if not df.empty:
+            # Step 2: Data Validation
+            if not validate_data(df, table):
+                log_pipeline_metadata(table, "FAILED", 0, "Validation failed", execution_date)
+                return
+
+            # Step 3: Deduplication
+            df = deduplicate_data(df, table)
+
+            # Step 4: Incremental Filtering
+            df = filter_incremental_data(df, table)
+            
+            if df.empty:
+                log_pipeline_metadata(table, "NO_NEW_DATA", 0, None, execution_date)
+                return
+
+            # Step 5: Load data to BigQuery
+            load_data_to_bigquery(df, table)
+
+            # Step 6: Log metadata after loading data
+            log_pipeline_metadata(table, "SUCCESS", len(df), None, execution_date)
+
+    except Exception as e:
+        log_pipeline_metadata(table, "FAILED", 0, str(e), execution_date)
+        logger.error(f"❌ Error processing {table}: {str(e)}")
+
+
+def log_pipeline_metadata(
+    table_name: str,
+    status: str,
+    rows_processed: int = 0,
+    error_message: Optional[str] = None,
+    execution_date: Optional[datetime] = None
+):
+    """Log pipeline execution metadata to BigQuery."""
+    # Handle execution_date
+    exec_date = execution_date or datetime.utcnow()
+
+    metadata = {
+        "run_id": str(uuid.uuid4()),
+        "table_name": table_name,
+        "execution_date": exec_date.isoformat(),
+        "status": status,
+        "rows_processed": rows_processed,
+        "error_message": error_message,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    try:
+        errors = client.insert_rows_json(METADATA_TABLE, [metadata])
+        if errors:
+            logger.error(f"❌ Failed to log metadata: {errors}")
+    except Exception as e:
+        logger.error(f"❌ Error logging metadata: {str(e)}")
 
 def migrate_metrics_schema():
     """Migrate the metrics table schema to accept string IDs and updated fields."""
@@ -853,6 +1007,7 @@ with DAG(
     tags=["google_ads", "ingestion", "bigquery"]
 ) as dag:
 
+    # Initialize tables
     init_tables = PythonOperator(
         task_id="create_bigquery_tables",
         python_callable=create_bigquery_tables,
@@ -861,12 +1016,11 @@ with DAG(
 
     # ✅ Grouped BigQuery schema migration tasks
     with TaskGroup("schema_migrations", tooltip="BigQuery schema migrations") as schema_migrations:
-        # Change this in your DAG definition:
         migrate_metrics_schema = PythonOperator(
             task_id="migrate_metrics_schema",
-            python_callable=migrate_metrics_schema,  # Changed from migrate_metrics_table_schema
+            python_callable=migrate_metrics_schema,
             execution_timeout=timedelta(minutes=15)
-)
+        )
 
         migrate_ad_groups_schema_task = PythonOperator(
             task_id="migrate_ad_groups_schema",
@@ -892,8 +1046,7 @@ with DAG(
             execution_timeout=timedelta(minutes=10)
         )
 
-
-    # ✅ Extract/load tasks
+    # ✅ Data extraction and loading tasks
     extract_load_campaigns = PythonOperator(
         task_id="extract_load_campaigns",
         python_callable=extract_and_load,
@@ -943,7 +1096,6 @@ with DAG(
     )
 
     # ✅ DAG dependencies
-    # In your DAG definition, modify the dependencies:
     init_tables >> schema_migrations >> [
         extract_load_campaigns,
         extract_load_ad_groups,
@@ -952,6 +1104,7 @@ with DAG(
         extract_load_budgets
     ]
 
+    # Run dbt after all the data loading tasks are complete
     [
         extract_load_campaigns,
         extract_load_ad_groups,
