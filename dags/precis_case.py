@@ -108,33 +108,6 @@ REQUIRED_FIELDS = {
 
 
 
-
-# Logger configuration
-logger = logging.getLogger("airflow")
-logger.setLevel(logging.INFO)
-
-# Variables from Airflow UI
-PROJECT_ID = Variable.get("GCP_PROJECT_ID")
-DATASET_ID = Variable.get("DATASET_ID")
-BQ_REGION = Variable.get("BQ_REGION", default_var="us")
-ALERT_EMAILS = Variable.get("ALERT_EMAILS", default_var="").split(",")
-
-# BigQuery client
-client = bigquery.Client(project=PROJECT_ID)
-
-# Metadata table for logging
-METADATA_TABLE = f"{PROJECT_ID}.{DATASET_ID}.pipeline_metadata"
-
-# GitHub-hosted mock JSON endpoints
-MOCK_API_URLS = {
-    "campaigns": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/campaigns.json",
-    "ad_groups": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ad_groups.json",
-    "ads": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ads.json",
-    "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
-    "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
-}
-
-
 def log_pipeline_metadata(
     table_name: str,
     status: str,
