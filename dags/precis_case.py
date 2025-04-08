@@ -199,10 +199,9 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
             if isinstance(data, dict) and 'campaigns' in data:
                 data = data['campaigns']
             for item in data:
-                if 'id' in item and 'campaign_id' not in item:
-                    item['campaign_id'] = item.pop('id')
-                if 'name' in item and 'campaign_name' not in item:
-                    item['campaign_name'] = item.pop('name')
+                item["campaign_id"] = item.get("id", item.get("campaign_id"))
+                item["campaign_name"] = item.get("name", item.get("campaign_name"))
+
                     
         return pd.DataFrame(data)
     except requests.exceptions.RequestException as e:
