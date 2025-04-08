@@ -107,51 +107,6 @@ REQUIRED_FIELDS = {
     "budgets": ["campaign_id", "date"]
 }
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.bash import BashOperator
-from airflow.models import Variable
-from airflow.utils.email import send_email
-from google.cloud import bigquery
-from datetime import datetime, timedelta
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
-import requests
-import uuid
-import os
-import logging
-import json
-from typing import Dict, List, Optional
-import tempfile
-from airflow.utils.task_group import TaskGroup
-
-
-# Logger configuration
-logger = logging.getLogger("airflow")
-logger.setLevel(logging.INFO)
-
-# Variables from Airflow UI
-PROJECT_ID = Variable.get("GCP_PROJECT_ID")
-DATASET_ID = Variable.get("DATASET_ID")
-BQ_REGION = Variable.get("BQ_REGION", default_var="us")
-ALERT_EMAILS = Variable.get("ALERT_EMAILS", default_var="").split(",")
-
-# BigQuery client
-client = bigquery.Client(project=PROJECT_ID)
-
-# Metadata table for logging
-METADATA_TABLE = f"{PROJECT_ID}.{DATASET_ID}.pipeline_metadata"
-
-# GitHub-hosted mock JSON endpoints
-MOCK_API_URLS = {
-    "campaigns": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/campaigns.json",
-    "ad_groups": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ad_groups.json",
-    "ads": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/ads.json",
-    "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
-    "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
-}
-
 
 def log_pipeline_metadata(
     table_name: str,
