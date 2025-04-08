@@ -421,6 +421,7 @@ default_args = {
 }
 
 # DAG definition
+# DAG definition
 with DAG(
     dag_id="google_ads_ingestion_pipeline",
     default_args=default_args,
@@ -438,20 +439,68 @@ with DAG(
         execution_timeout=timedelta(minutes=10)
     )
 
-    extract_load_tasks = []
-    for table in MOCK_API_URLS.keys():
-        task = PythonOperator(
-            task_id=f"extract_load_{table}",
-            python_callable=extract_and_load,
-            op_kwargs={
-                "table": table,
-                "execution_date": "{{ execution_date }}"  # Pass the actual datetime object
-            },
-            execution_timeout=timedelta(minutes=30),
-            retries=1
+    # Add schema migration task if needed
+    migrate_schema = PythonOperator(
+        task_id="migrate_metrics_schema",
+        python_callable=migrate_metrics_table_schema,
+        execution_timeout=timedelta(minutes=15)
     )
-    init_tables >> task
-    extract_load_tasks.append(task)
+
+    # Create all extract/load tasks
+    extract_load_campaigns = PythonOperator(
+        task_id="extract_load_campaigns",
+        python_callable=extract_and_load,
+        op_kwargs={
+            "table": "campaigns",
+            "execution_date": "{{ execution_date }}"
+        },
+        execution_timeout=timedelta(minutes=30),
+        retries=1
+    )
+
+    extract_load_ad_groups = PythonOperator(
+        task_id="extract_load_ad_groups",
+        python_callable=extract_and_load,
+        op_kwargs={
+            "table": "ad_groups",
+            "execution_date": "{{ execution_date }}"
+        },
+        execution_timeout=timedelta(minutes=30),
+        retries=1
+    )
+
+    extract_load_ads = PythonOperator(
+        task_id="extract_load_ads",
+        python_callable=extract_and_load,
+        op_kwargs={
+            "table": "ads",
+            "execution_date": "{{ execution_date }}"
+        },
+        execution_timeout=timedelta(minutes=30),
+        retries=1
+    )
+
+    extract_load_metrics = PythonOperator(
+        task_id="extract_load_metrics",
+        python_callable=extract_and_load,
+        op_kwargs={
+            "table": "metrics",
+            "execution_date": "{{ execution_date }}"
+        },
+        execution_timeout=timedelta(minutes=30),
+        retries=1
+    )
+
+    extract_load_budgets = PythonOperator(
+        task_id="extract_load_budgets",
+        python_callable=extract_and_load,
+        op_kwargs={
+            "table": "budgets",
+            "execution_date": "{{ execution_date }}"
+        },
+        execution_timeout=timedelta(minutes=30),
+        retries=1
+    )
 
     dbt_run = BashOperator(
         task_id="run_dbt_build",
@@ -460,6 +509,23 @@ with DAG(
         retries=1
     )
 
-    # Set dependencies
-    for task in extract_load_tasks:
-        task >> dbt_run
+    # Set up dependencies
+    init_tables >> migrate_schema
+    
+    # Run all extract/load tasks in parallel after schema migration
+    migrate_schema >> [
+        extract_load_campaigns,
+        extract_load_ad_groups,
+        extract_load_ads,
+        extract_load_metrics,
+        extract_load_budgets
+    ]
+    
+    # All extract/load tasks must complete before dbt runs
+    [
+        extract_load_campaigns,
+        extract_load_ad_groups,
+        extract_load_ads,
+        extract_load_metrics,
+        extract_load_budgets
+    ] >> dbt_run
