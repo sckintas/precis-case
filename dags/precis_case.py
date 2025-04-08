@@ -15,6 +15,8 @@ import logging
 import json
 from typing import Dict, List, Optional
 import tempfile
+from airflow.utils.task_group import TaskGroup
+
 
 # Logger configuration
 logger = logging.getLogger("airflow")
@@ -499,8 +501,6 @@ default_args = {
     "email_on_retry": False
 }
 
-# DAG definition
-# DAG definition
 with DAG(
     dag_id="google_ads_ingestion_pipeline",
     default_args=default_args,
@@ -518,28 +518,25 @@ with DAG(
         execution_timeout=timedelta(minutes=10)
     )
 
-    # Add schema migration task if needed
-    migrate_schema = PythonOperator(
-        task_id="migrate_metrics_schema",
-        python_callable=migrate_metrics_table_schema,
-        execution_timeout=timedelta(minutes=15)
-    )
+    # ✅ Grouped schema migration tasks
+    with TaskGroup("schema_migrations", tooltip="BigQuery schema migrations") as schema_migrations:
+        migrate_metrics_schema = PythonOperator(
+            task_id="migrate_metrics_schema",
+            python_callable=migrate_metrics_table_schema,
+            execution_timeout=timedelta(minutes=15)
+        )
 
-    migrate_ad_groups_schema_task = PythonOperator(
-    task_id="migrate_ad_groups_schema",
-    python_callable=migrate_ad_groups_schema,
-    execution_timeout=timedelta(minutes=10)
-)
+        migrate_ad_groups_schema_task = PythonOperator(
+            task_id="migrate_ad_groups_schema",
+            python_callable=migrate_ad_groups_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
 
-
-    # Create all extract/load tasks
+    # Extract/load tasks
     extract_load_campaigns = PythonOperator(
         task_id="extract_load_campaigns",
         python_callable=extract_and_load,
-        op_kwargs={
-            "table": "campaigns",
-            "execution_date": "{{ execution_date }}"
-        },
+        op_kwargs={"table": "campaigns", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -547,10 +544,7 @@ with DAG(
     extract_load_ad_groups = PythonOperator(
         task_id="extract_load_ad_groups",
         python_callable=extract_and_load,
-        op_kwargs={
-            "table": "ad_groups",
-            "execution_date": "{{ execution_date }}"
-        },
+        op_kwargs={"table": "ad_groups", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -558,10 +552,7 @@ with DAG(
     extract_load_ads = PythonOperator(
         task_id="extract_load_ads",
         python_callable=extract_and_load,
-        op_kwargs={
-            "table": "ads",
-            "execution_date": "{{ execution_date }}"
-        },
+        op_kwargs={"table": "ads", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -569,10 +560,7 @@ with DAG(
     extract_load_metrics = PythonOperator(
         task_id="extract_load_metrics",
         python_callable=extract_and_load,
-        op_kwargs={
-            "table": "metrics",
-            "execution_date": "{{ execution_date }}"
-        },
+        op_kwargs={"table": "metrics", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -580,10 +568,7 @@ with DAG(
     extract_load_budgets = PythonOperator(
         task_id="extract_load_budgets",
         python_callable=extract_and_load,
-        op_kwargs={
-            "table": "budgets",
-            "execution_date": "{{ execution_date }}"
-        },
+        op_kwargs={"table": "budgets", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -595,25 +580,21 @@ with DAG(
         retries=1
     )
 
-    # Set up dependencies
-    # DAG flow
-init_tables >> migrate_schema >> migrate_ad_groups_schema_task
+    # ✅ DAG Dependencies
+    init_tables >> schema_migrations
 
-# Run extract/load tasks after schema steps
-migrate_schema >> [
-    extract_load_campaigns,
-    extract_load_ads,
-    extract_load_metrics,
-    extract_load_budgets
-]
+    schema_migrations >> [
+        extract_load_campaigns,
+        extract_load_ad_groups,
+        extract_load_ads,
+        extract_load_metrics,
+        extract_load_budgets
+    ]
 
-migrate_ad_groups_schema_task >> extract_load_ad_groups
-
-# All extract/load tasks must complete before dbt runs
-[
-    extract_load_campaigns,
-    extract_load_ad_groups,
-    extract_load_ads,
-    extract_load_metrics,
-    extract_load_budgets
-] >> dbt_run
+    [
+        extract_load_campaigns,
+        extract_load_ad_groups,
+        extract_load_ads,
+        extract_load_metrics,
+        extract_load_budgets
+    ] >> dbt_run
