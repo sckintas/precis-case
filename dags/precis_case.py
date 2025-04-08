@@ -566,7 +566,104 @@ def migrate_campaign_table_schema():
         raise
 
 
+def extract_and_load(table: str, execution_date: datetime):
+    run_id = str(uuid.uuid4())
+    logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
+    temp_file = f"/tmp/{table}_{run_id}.parquet"
+
+    try:
+        # Fetch and validate data
+        url = MOCK_API_URLS[table]
+        logger.info(f"🌐 Fetching data from {url}")
+        df = fetch_data_from_api(url)
+
+        if df.empty:
+            logger.info(f"⚠️ No data returned for {table}")
+            log_pipeline_metadata(table, "NO_DATA", 0, None, execution_date)
+            return
+
+        # Normalize IDs and names as needed
+        if table == "ad_groups":
+            df.rename(columns={"id": "ad_group_id", "name": "ad_group_name"}, inplace=True)
+            df["status"] = df.get("status", "ENABLED")
+
+        if table == "ads":
+            df.rename(columns={"id": "ad_id"}, inplace=True)
+
+        if table == "campaigns":
+            df["campaign_id"] = df.get("id", df.get("campaign_id", "")).astype(str)
+            df["campaign_name"] = df.get("name", df.get("campaign_name", ""))
+
+        if table == "budgets":
+            df["budget_id"] = df.get("id", df.get("budget_id", "")).astype(str)
+            df["budget_amount"] = df.get("amount_micros", 0) / 1_000_000
+
+        if table == "metrics":
+            df["campaign_id"] = df.get("campaign_id", "").astype(str)
+            df["ad_group_id"] = df.get("ad_group_id", "").astype(str)
+            df["ad_id"] = df.get("ad_id", "").astype(str)
+
+        if not validate_data(df, table):
+            msg = f"Data validation failed for {table}"
+            logger.error(f"❌ {msg}")
+            log_pipeline_metadata(table, "FAILED", 0, msg, execution_date)
+            raise ValueError(msg)
+
+        # Apply incremental logic
+        date_field = REFERENCE_FIELDS.get(table)
+        if date_field in df.columns:
+            latest_date = get_latest_date(table)
+            if latest_date:
+                df[date_field] = pd.to_datetime(df[date_field])
+                df = df[df[date_field] > pd.to_datetime(latest_date)]
+                logger.info(f"⏱️ Filtered data after {latest_date}, remaining rows: {len(df)}")
+
+        if df.empty:
+            logger.info(f"⚠️ No new rows to load for {table}")
+            log_pipeline_metadata(table, "NO_NEW_DATA", 0, None, execution_date)
+            return
+
+        # Format date fields
+        for col in df.columns:
+            if "date" in col.lower():
+                df[col] = pd.to_datetime(df[col]).dt.date
+
+        pq.write_table(pa.Table.from_pandas(df), temp_file)
+
+        job_config = bigquery.LoadJobConfig(
+            source_format=bigquery.SourceFormat.PARQUET,
+            write_disposition="WRITE_APPEND",
+            schema_update_options=[
+                bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
+                bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION
+            ]
+        )
+
+        logger.info(f"📤 Loading {len(df)} rows to BigQuery table {table}")
+        with open(temp_file, "rb") as f:
+            job = client.load_table_from_file(
+                f,
+                f"{PROJECT_ID}.{DATASET_ID}.{table}",
+                job_config=job_config
+            )
+            job.result()
+
+        os.remove(temp_file)
+        log_pipeline_metadata(table, "SUCCESS", len(df), None, execution_date)
+        logger.info(f"✅ Successfully loaded {len(df)} rows to {table}")
+
+    except Exception as e:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+
+        error_msg = f"Error processing {table}: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        log_pipeline_metadata(table, "FAILED", 0, error_msg, execution_date)
+        raise
+
+
 def get_latest_date(table: str) -> Optional[datetime]:
+    """Get the latest date from a BigQuery table."""
     date_field = REFERENCE_FIELDS.get(table)
     if not date_field:
         return None
