@@ -59,14 +59,13 @@ TABLE_SCHEMAS = {
         {"name": "status", "type": "STRING"}
     ],
     "ads": [
-        {"name": "ad_id", "type": "INTEGER"},
-        {"name": "ad_group_id", "type": "INTEGER"},
+        {"name": "ad_id", "type": "STRING"},
+        {"name": "ad_group_id", "type": "STRING"},
         {"name": "headline", "type": "STRING"},
-        {"name": "description", "type": "STRING"},
         {"name": "final_url", "type": "STRING"},
-        {"name": "start_date", "type": "DATE"},
-        {"name": "end_date", "type": "DATE"}
+        {"name": "status", "type": "STRING"}
     ],
+
     "metrics": [
         {"name": "campaign_id", "type": "STRING"},  # Changed from INTEGER to STRING
         {"name": "ad_group_id", "type": "STRING"},  # Also check if this needs changing
@@ -99,7 +98,7 @@ REFERENCE_FIELDS = {
 REQUIRED_FIELDS = {
     "campaigns": ["campaign_id", "campaign_name", "start_date"],
     "ad_groups": ["ad_group_id", "campaign_id"],
-    "ads": ["ad_id", "ad_group_id", "start_date"],
+    "ads": ["ad_id", "ad_group_id"],
     "metrics": ["date", "campaign_id"],
     "budgets": ["campaign_id", "start_date"]
 }
