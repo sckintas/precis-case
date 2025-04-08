@@ -68,9 +68,9 @@ TABLE_SCHEMAS = {
         {"name": "end_date", "type": "DATE"}
     ],
     "metrics": [
-        {"name": "campaign_id", "type": "INTEGER"},
-        {"name": "ad_group_id", "type": "INTEGER"},
-        {"name": "ad_id", "type": "INTEGER"},
+        {"name": "campaign_id", "type": "STRING"},  # Changed from INTEGER to STRING
+        {"name": "ad_group_id", "type": "STRING"},  # Also check if this needs changing
+        {"name": "ad_id", "type": "STRING"},       # Also check if this needs changing
         {"name": "date", "type": "DATE"},
         {"name": "impressions", "type": "INTEGER"},
         {"name": "clicks", "type": "INTEGER"},
@@ -115,11 +115,11 @@ def log_pipeline_metadata(
     metadata = {
         "run_id": str(uuid.uuid4()),
         "table_name": table_name,
-        "execution_date": execution_date or datetime.utcnow(),
+        "execution_date": (execution_date or datetime.utcnow()).isoformat(),  # Convert to string
         "status": status,
         "rows_processed": rows_processed,
         "error_message": error_message,
-        "timestamp": datetime.utcnow()
+        "timestamp": datetime.utcnow().isoformat()  # Convert to string
     }
     
     try:
@@ -295,6 +295,14 @@ def extract_and_load(table: str, execution_date: datetime):
         
         # Step 4: Prepare data for BigQuery
         temp_file = f"/tmp/{table}_{run_id}.parquet"
+
+        if table == "metrics":
+        # Convert ID fields to the correct type (STRING in this case)
+            df["campaign_id"] = df["campaign_id"].astype(str)
+            if "ad_group_id" in df.columns:
+                df["ad_group_id"] = df["ad_group_id"].astype(str)
+            if "ad_id" in df.columns:
+                df["ad_id"] = df["ad_id"].astype(str)
         
         # Convert date fields to proper format
         for field in df.columns:
