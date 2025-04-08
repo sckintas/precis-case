@@ -499,6 +499,22 @@ def filter_incremental_data(df: pd.DataFrame, table_name: str) -> pd.DataFrame:
 
 def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
     """Load data into BigQuery and log the row count."""
+    
+    # Ensure partitioning and clustering configurations are applied
+    partition_field = REFERENCE_FIELDS.get(table_name)
+    partitioning = None
+    if partition_field:
+        partitioning = bigquery.TimePartitioning(
+            type_=bigquery.TimePartitioningType.DAY,
+            field=partition_field
+        )
+        logger.info(f"✅ Partitioning {table_name} on {partition_field}")
+
+    # Retrieve clustering configuration
+    clustering_fields = CLUSTERING_CONFIG.get(table_name, [])
+    if clustering_fields:
+        logger.info(f"✅ Clustering {table_name} on {clustering_fields}")
+
     # Define job config for loading data into BigQuery (e.g., write mode)
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
@@ -506,7 +522,9 @@ def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
         schema_update_options=[
             bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION,
             bigquery.SchemaUpdateOption.ALLOW_FIELD_RELAXATION
-        ]
+        ],
+        time_partitioning=partitioning,  # Apply partitioning here
+        clustering_fields=clustering_fields  # Apply clustering here
     )
 
     # Convert DataFrame to Parquet and upload to BigQuery
@@ -534,6 +552,7 @@ def load_data_to_bigquery(df: pd.DataFrame, table_name: str) -> None:
     # Clean up temporary file
     os.remove(temp_file)
 
+
 def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
     logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
@@ -559,7 +578,7 @@ def extract_and_load(table: str, execution_date: datetime):
                 log_pipeline_metadata(table, "NO_NEW_DATA", 0, None, execution_date)
                 return
 
-            # Step 5: Load data to BigQuery
+            # Step 5: Load data to BigQuery (Partitioning and Clustering Applied)
             load_data_to_bigquery(df, table)
 
             # Step 6: Log metadata after loading data
