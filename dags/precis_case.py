@@ -667,8 +667,8 @@ def extract_and_load(table: str, execution_date: datetime):
 
         # Step 2: Apply data type conversions as needed
         if table == "metrics":
-            # Ensure 'average_cpc' is treated as FLOAT
-            df["average_cpc"] = df["average_cpc"].astype(float, errors='ignore')  # Convert to float if possible
+            # Ensure 'conversions' is treated as FLOAT
+            df["conversions"] = df["conversions"].astype(float, errors='ignore')  # Convert to float if possible
             df["campaign_id"] = df["campaign_id"].astype(str)
             for id_field in ["ad_group_id", "ad_id"]:
                 if id_field in df.columns:
