@@ -235,6 +235,7 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                 if 'id' in item and 'ad_id' not in item:
                     item['ad_id'] = item.pop('id')
         
+        # Normalize field names for budgets
         if "budgets" in url:
             if isinstance(data, dict) and 'budgets' in data:
                 data = data['budgets']
@@ -243,14 +244,29 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                 # Convert micros to float dollars
                 item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
 
+        # Normalize field names for campaigns
         if "campaigns" in url:
             if isinstance(data, dict) and 'campaigns' in data:
                 data = data['campaigns']
             for item in data:
                 item["campaign_id"] = item.get("id", item.get("campaign_id"))
                 item["campaign_name"] = item.get("name", item.get("campaign_name"))
+        
+        # Normalize field names for metrics
+        if "metrics" in url:
+            if isinstance(data, dict) and 'metrics' in data:
+                data = data['metrics']
 
-                    
+            for item in data:
+                # Ensure 'campaign_id' is added if missing
+                if 'campaign_id' not in item:
+                    item['campaign_id'] = "default_campaign_id"  # Replace with actual logic if needed
+                # Ensure 'ad_group_id' and 'ad_id' are properly formatted
+                if 'ad_group_id' in item:
+                    item['ad_group_id'] = str(item['ad_group_id'])
+                if 'ad_id' in item:
+                    item['ad_id'] = str(item['ad_id'])
+
         return pd.DataFrame(data)
     except requests.exceptions.RequestException as e:
         logger.error(f"❌ Failed to fetch data from {url}: {str(e)}")
@@ -258,6 +274,7 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
     except ValueError as e:
         logger.error(f"❌ Invalid JSON data from {url}: {str(e)}")
         raise
+
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
     """Validate data with field name normalization."""
