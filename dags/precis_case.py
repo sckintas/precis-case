@@ -14,6 +14,7 @@ import os
 import logging
 import json
 from typing import Dict, List, Optional
+from typing import Union, Optional
 import tempfile
 from airflow.utils.task_group import TaskGroup
 
