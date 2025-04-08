@@ -16,11 +16,6 @@ import json
 from typing import Dict, List, Optional
 import tempfile
 
-
-temp_file = os.path.join(tempfile.gettempdir(), f"{table}_{run_id}.parquet")
-logger.info(f"📝 Writing parquet to temporary file: {temp_file}")
-
-
 # Logger configuration
 logger = logging.getLogger("airflow")
 logger.setLevel(logging.INFO)
@@ -45,7 +40,6 @@ MOCK_API_URLS = {
     "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
     "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
 }
-
 # Schema definitions for each table
 TABLE_SCHEMAS = {
     "campaigns": [
@@ -326,8 +320,9 @@ def extract_and_load(table: str, execution_date: datetime):
     run_id = str(uuid.uuid4())
     logger.info(f"🏁 Starting processing for {table} (run_id: {run_id})")
     
-    # Define temp file path - now correctly scoped inside the function
-    temp_file = f"/tmp/{table}_{run_id}.parquet"
+    # Define temp file path inside the function where variables are available
+    temp_file = os.path.join(tempfile.gettempdir(), f"{table}_{run_id}.parquet")
+    logger.info(f"📝 Writing parquet to temporary file: {temp_file}")
     
     try:
         # Step 1: Fetch data from API
@@ -340,6 +335,7 @@ def extract_and_load(table: str, execution_date: datetime):
             log_pipeline_metadata(table, "NO_DATA", 0, None, execution_date)
             return
         
+        # [Continue with the rest of your existing extract_and_load function]
         # Step 2: Validate data and convert types
         if not validate_data(df, table):
             error_msg = f"Data validation failed for {table}"
@@ -413,7 +409,6 @@ def extract_and_load(table: str, execution_date: datetime):
         logger.error(f"❌ {error_msg}")
         log_pipeline_metadata(table, "FAILED", 0, error_msg, execution_date)
         raise
-
 
 def get_latest_date(table: str) -> Optional[datetime]:
     """Get the latest date from a BigQuery table."""
