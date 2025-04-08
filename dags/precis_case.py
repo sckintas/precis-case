@@ -79,11 +79,12 @@ TABLE_SCHEMAS = {
         {"name": "cost_micros", "type": "INTEGER"},
         {"name": "conversions", "type": "FLOAT"}
     ],
+    
     "budgets": [
-        {"name": "campaign_id", "type": "STRING"},
-        {"name": "budget_amount", "type": "FLOAT"},
-        {"name": "date", "type": "DATE"}
-    ]
+    {"name": "budget_id", "type": "STRING"},
+    {"name": "budget_amount", "type": "FLOAT"},
+    {"name": "date", "type": "DATE"}
+]
 }
 # Partitioning fields
 REFERENCE_FIELDS = {
@@ -472,9 +473,8 @@ def migrate_ads_schema():
 
 
 def migrate_budgets_schema():
-    """Migrate the budgets table schema to match updated fields."""
+    """Migrate budgets table schema to include budget_id, budget_amount, and date."""
     table_ref = client.dataset(DATASET_ID).table("budgets")
-
     try:
         new_schema = [
             bigquery.SchemaField("budget_id", "STRING"),
@@ -483,26 +483,23 @@ def migrate_budgets_schema():
         ]
 
         temp_table_ref = client.dataset(DATASET_ID).table("budgets_temp")
-        client.delete_table(temp_table_ref, not_found_ok=True)
-        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
-        client.create_table(temp_table)
-
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
+        client.create_table(bigquery.Table(temp_table_ref, schema=new_schema))
 
         query = f"""
         SELECT 
-            CAST(budget_id AS STRING) AS budget_id,
-            budget_amount,
+            CAST(id AS STRING) AS budget_id,
+            SAFE_DIVIDE(amount_micros, 1000000.0) AS budget_amount,
             date
         FROM `{PROJECT_ID}.{DATASET_ID}.budgets`
         """
 
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref, 
+            write_disposition="WRITE_TRUNCATE"
+        )
         client.query(query, job_config=job_config).result()
 
-        client.delete_table(table_ref, not_found_ok=True)
+        client.delete_table(table_ref)
         client.create_table(bigquery.Table(table_ref, schema=new_schema))
         client.copy_table(temp_table_ref, table_ref)
         client.delete_table(temp_table_ref)
@@ -512,6 +509,7 @@ def migrate_budgets_schema():
     except Exception as e:
         logger.error(f"❌ Failed to migrate budgets schema: {str(e)}")
         raise
+
 
 def migrate_campaign_table_schema():
     """Migrate the campaigns table schema to match updated definition."""
