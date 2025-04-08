@@ -94,7 +94,7 @@ REFERENCE_FIELDS = {
 
 # Required fields for each table (data validation)
 REQUIRED_FIELDS = {
-    "campaigns": ["campaign_id", "campaign_name", "start_date"],
+    "campaigns": ["campaign_id", "campaign_name"],
     "ad_groups": ["ad_group_id", "campaign_id"],
     "ads": ["ad_id", "ad_group_id"],
     "metrics": ["date", "campaign_id"],
