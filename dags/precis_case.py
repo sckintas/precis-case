@@ -374,6 +374,54 @@ def migrate_ad_groups_schema():
         logger.error(f"❌ Failed to migrate ad_groups schema: {str(e)}")
         raise
 
+def migrate_ads_schema():
+    """Migrate the ads table schema to STRING ad_id and ad_group_id."""
+    table_ref = client.dataset(DATASET_ID).table("ads")
+
+    try:
+        table = client.get_table(table_ref)
+        new_schema = []
+        for field in table.schema:
+            if field.name == "ad_id":
+                new_schema.append(bigquery.SchemaField("ad_id", "STRING"))
+            elif field.name == "ad_group_id":
+                new_schema.append(bigquery.SchemaField("ad_group_id", "STRING"))
+            else:
+                new_schema.append(field)
+
+        temp_table_ref = client.dataset(DATASET_ID).table("ads_temp")
+        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
+        client.create_table(temp_table)
+
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref,
+            write_disposition="WRITE_TRUNCATE"
+        )
+
+        query = f"""
+        SELECT 
+            CAST(ad_id AS STRING) AS ad_id,
+            CAST(ad_group_id AS STRING) AS ad_group_id,
+            headline,
+            description,
+            final_url,
+            start_date,
+            end_date
+        FROM `{PROJECT_ID}.{DATASET_ID}.ads`
+        """
+
+        client.query(query, job_config=job_config).result()
+
+        client.delete_table(table_ref)
+        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        client.copy_table(temp_table_ref, table_ref)
+        client.delete_table(temp_table_ref)
+
+        logger.info("✅ Successfully migrated ads table schema")
+
+    except Exception as e:
+        logger.error(f"❌ Failed to migrate ads schema: {str(e)}")
+        raise
 
 
 def extract_and_load(table: str, execution_date: datetime):
@@ -527,7 +575,7 @@ with DAG(
         execution_timeout=timedelta(minutes=10)
     )
 
-    # ✅ Grouped schema migration tasks
+    # ✅ Grouped BigQuery schema migration tasks
     with TaskGroup("schema_migrations", tooltip="BigQuery schema migrations") as schema_migrations:
         migrate_metrics_schema = PythonOperator(
             task_id="migrate_metrics_schema",
@@ -541,7 +589,13 @@ with DAG(
             execution_timeout=timedelta(minutes=10)
         )
 
-    # Extract/load tasks
+        migrate_ads_schema_task = PythonOperator(
+            task_id="migrate_ads_schema",
+            python_callable=migrate_ads_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
+
+    # ✅ Extract/load tasks
     extract_load_campaigns = PythonOperator(
         task_id="extract_load_campaigns",
         python_callable=extract_and_load,
@@ -582,6 +636,7 @@ with DAG(
         retries=1
     )
 
+    # ✅ dbt run command
     dbt_run = BashOperator(
         task_id="run_dbt_build",
         bash_command="dbt build --project-dir /home/airflow/gcs/dags/dbt_project --profiles-dir /home/airflow/.dbt",
@@ -589,7 +644,7 @@ with DAG(
         retries=1
     )
 
-    # ✅ DAG Dependencies
+    # ✅ DAG dependencies
     init_tables >> schema_migrations
 
     schema_migrations >> [
