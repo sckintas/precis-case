@@ -510,12 +510,29 @@ def log_pipeline_metadata(
     except Exception as e:
         logger.error(f"❌ Error while logging metadata for {table_name}: {str(e)}")
 
+def create_partitioned_clustered_table(table_name: str, schema: List[bigquery.SchemaField]) -> bigquery.Table:
+    table_ref = client.dataset(DATASET_ID).table(table_name)
+    table = bigquery.Table(table_ref, schema=schema)
+
+    partition_field = PARTITION_FIELDS.get(table_name)
+    clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
+
+    if partition_field:
+        table.time_partitioning = bigquery.TimePartitioning(
+            type_=bigquery.TimePartitioningType.DAY,
+            field=partition_field
+        )
+
+    if clustering_fields:
+        table.clustering_fields = clustering_fields
+
+    return client.create_table(table)
 
 
 def migrate_metrics_schema():
-    """Migrate metrics table schema in-place using a temp table."""
-    table_ref = client.dataset(DATASET_ID).table("metrics")
-    temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
+    table_name = "metrics"
+    table_ref = client.dataset(DATASET_ID).table(table_name)
+    temp_table_ref = client.dataset(DATASET_ID).table(f"{table_name}_temp")
 
     new_schema = [
         bigquery.SchemaField("ad_group_id", "STRING", mode="REQUIRED"),
@@ -526,15 +543,12 @@ def migrate_metrics_schema():
         bigquery.SchemaField("average_cpc", "FLOAT"),
         bigquery.SchemaField("cost_micros", "INTEGER"),
         bigquery.SchemaField("conversions", "FLOAT"),
-        # Add optional fields if you will populate them later
         bigquery.SchemaField("campaign_id", "STRING"),
         bigquery.SchemaField("ad_id", "STRING")
     ]
 
     try:
         client.delete_table(temp_table_ref, not_found_ok=True)
-        logger.info("🧹 Deleted existing metrics_temp table")
-
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
@@ -550,51 +564,40 @@ def migrate_metrics_schema():
             conversions,
             NULL AS campaign_id,
             NULL AS ad_id
-        FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
+        FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
         """
 
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
+        job_config = bigquery.QueryJobConfig(destination=temp_table_ref, write_disposition="WRITE_TRUNCATE")
         client.query(query, job_config=job_config).result()
 
         client.delete_table(table_ref, not_found_ok=True)
-        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        create_partitioned_clustered_table(table_name, new_schema)
         client.copy_table(temp_table_ref, table_ref)
         client.delete_table(temp_table_ref)
-
-        logger.info("✅ Successfully migrated metrics table schema")
+        logger.info(f"✅ Successfully migrated {table_name} schema with partitioning and clustering")
 
     except Exception as e:
-        logger.error(f"❌ Failed to migrate metrics schema: {str(e)}")
+        logger.error(f"❌ Failed to migrate {table_name} schema: {str(e)}")
         raise
 
 
-
 def migrate_ad_groups_schema():
-    """Migrate the ad_groups table schema to STRING types and updated fields."""
-    table_ref = client.dataset(DATASET_ID).table("ad_groups")
+    table_name = "ad_groups"
+    table_ref = client.dataset(DATASET_ID).table(table_name)
+    temp_table_ref = client.dataset(DATASET_ID).table(f"{table_name}_temp")
+
+    new_schema = [
+        bigquery.SchemaField("ad_group_id", "STRING"),
+        bigquery.SchemaField("campaign_id", "STRING"),
+        bigquery.SchemaField("ad_group_name", "STRING"),
+        bigquery.SchemaField("status", "STRING"),
+        bigquery.SchemaField("date", "DATE")
+    ]
 
     try:
-        new_schema = [
-            bigquery.SchemaField("ad_group_id", "STRING"),
-            bigquery.SchemaField("campaign_id", "STRING"),
-            bigquery.SchemaField("ad_group_name", "STRING"),
-            bigquery.SchemaField("status", "STRING"),
-            bigquery.SchemaField("date", "DATE")
-        ]
-
-        temp_table_ref = client.dataset(DATASET_ID).table("ad_groups_temp")
         client.delete_table(temp_table_ref, not_found_ok=True)
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
-
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
 
         query = f"""
         SELECT 
@@ -603,47 +606,41 @@ def migrate_ad_groups_schema():
             ad_group_name,
             status,
             date
-        FROM `{PROJECT_ID}.{DATASET_ID}.ad_groups`
+        FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
         """
 
+        job_config = bigquery.QueryJobConfig(destination=temp_table_ref, write_disposition="WRITE_TRUNCATE")
         client.query(query, job_config=job_config).result()
 
         client.delete_table(table_ref, not_found_ok=True)
-        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        create_partitioned_clustered_table(table_name, new_schema)
         client.copy_table(temp_table_ref, table_ref)
         client.delete_table(temp_table_ref)
-
-        logger.info("✅ Successfully migrated ad_groups table schema")
+        logger.info(f"✅ Successfully migrated {table_name} schema with partitioning and clustering")
 
     except Exception as e:
-        logger.error(f"❌ Failed to migrate ad_groups schema: {str(e)}")
+        logger.error(f"❌ Failed to migrate {table_name} schema: {str(e)}")
         raise
 
+
 def migrate_ads_schema():
-    """Migrate the ads table schema to STRING types and updated fields, preserving partitioning and clustering."""
     table_name = "ads"
     table_ref = client.dataset(DATASET_ID).table(table_name)
     temp_table_ref = client.dataset(DATASET_ID).table(f"{table_name}_temp")
 
+    new_schema = [
+        bigquery.SchemaField("ad_id", "STRING"),
+        bigquery.SchemaField("ad_group_id", "STRING"),
+        bigquery.SchemaField("headline", "STRING"),
+        bigquery.SchemaField("status", "STRING"),
+        bigquery.SchemaField("date", "DATE")
+    ]
+
     try:
-        # Define new schema
-        new_schema = [
-            bigquery.SchemaField("ad_id", "STRING"),
-            bigquery.SchemaField("ad_group_id", "STRING"),
-            bigquery.SchemaField("headline", "STRING"),
-            bigquery.SchemaField("status", "STRING"),
-            bigquery.SchemaField("date", "DATE")
-        ]
-
-        # Delete temp table if exists
         client.delete_table(temp_table_ref, not_found_ok=True)
-        logger.info("🧹 Deleted existing ads_temp table")
-
-        # Create temp table
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
-        # Copy data with casted schema into temp table
         query = f"""
         SELECT 
             CAST(ad_id AS STRING) AS ad_id,
@@ -653,64 +650,34 @@ def migrate_ads_schema():
             date
         FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
         """
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
+
+        job_config = bigquery.QueryJobConfig(destination=temp_table_ref, write_disposition="WRITE_TRUNCATE")
         client.query(query, job_config=job_config).result()
 
-        # Delete old table
         client.delete_table(table_ref, not_found_ok=True)
-
-        # Prepare new table with partitioning + clustering
-        table = bigquery.Table(table_ref, schema=new_schema)
-
-        partition_field = PARTITION_FIELDS.get(table_name)
-        clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
-
-        if partition_field:
-            table.time_partitioning = bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY,
-                field=partition_field
-            )
-
-        if clustering_fields:
-            table.clustering_fields = clustering_fields
-
-        # Create new table
-        client.create_table(table)
-        logger.info(f"✅ Created {table_name} table with partitioning on '{partition_field}' and clustering on {clustering_fields}")
-
-        # Copy data from temp to new table
+        create_partitioned_clustered_table(table_name, new_schema)
         client.copy_table(temp_table_ref, table_ref)
-        logger.info("📤 Copied data from ads_temp to ads")
-
-        # Delete temp table
         client.delete_table(temp_table_ref)
-        logger.info("🧹 Deleted ads_temp")
-
-        logger.info("✅ Successfully migrated ads table schema")
+        logger.info(f"✅ Successfully migrated {table_name} schema with partitioning and clustering")
 
     except Exception as e:
-        logger.error(f"❌ Failed to migrate ads schema: {str(e)}")
+        logger.error(f"❌ Failed to migrate {table_name} schema: {str(e)}")
         raise
 
 
 def migrate_budgets_schema():
-    """Migrate budgets table schema to standard format with budget_id, budget_amount, and date."""
-    table_ref = client.dataset(DATASET_ID).table("budgets")
-    temp_table_ref = client.dataset(DATASET_ID).table("budgets_temp")
+    table_name = "budgets"
+    table_ref = client.dataset(DATASET_ID).table(table_name)
+    temp_table_ref = client.dataset(DATASET_ID).table(f"{table_name}_temp")
+
+    new_schema = [
+        bigquery.SchemaField("budget_id", "STRING"),
+        bigquery.SchemaField("budget_amount", "FLOAT"),
+        bigquery.SchemaField("date", "DATE")
+    ]
 
     try:
         client.delete_table(temp_table_ref, not_found_ok=True)
-        logger.info("🧹 Deleted existing budgets_temp table")
-
-        new_schema = [
-            bigquery.SchemaField("budget_id", "STRING"),
-            bigquery.SchemaField("budget_amount", "FLOAT"),
-            bigquery.SchemaField("date", "DATE")
-        ]
-
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
@@ -719,47 +686,40 @@ def migrate_budgets_schema():
             budget_id,
             budget_amount,
             date
-        FROM `{PROJECT_ID}.{DATASET_ID}.budgets`
+        FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
         """
 
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
+        job_config = bigquery.QueryJobConfig(destination=temp_table_ref, write_disposition="WRITE_TRUNCATE")
         client.query(query, job_config=job_config).result()
 
         client.delete_table(table_ref, not_found_ok=True)
-        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        create_partitioned_clustered_table(table_name, new_schema)
         client.copy_table(temp_table_ref, table_ref)
         client.delete_table(temp_table_ref)
-
-        logger.info("✅ Successfully migrated budgets table schema")
+        logger.info(f"✅ Successfully migrated {table_name} schema with partitioning and clustering")
 
     except Exception as e:
-        logger.error(f"❌ Failed to migrate budgets schema: {str(e)}")
+        logger.error(f"❌ Failed to migrate {table_name} schema: {str(e)}")
         raise
 
 
 def migrate_campaigns_schema():
-    """Migrate the campaigns table schema to include new fields."""
-    table_ref = client.dataset(DATASET_ID).table("campaigns")
-    temp_table_ref = client.dataset(DATASET_ID).table("campaigns_temp")
+    table_name = "campaigns"
+    table_ref = client.dataset(DATASET_ID).table(table_name)
+    temp_table_ref = client.dataset(DATASET_ID).table(f"{table_name}_temp")
+
+    new_schema = [
+        bigquery.SchemaField("campaign_id", "STRING"),
+        bigquery.SchemaField("campaign_name", "STRING"),
+        bigquery.SchemaField("status", "STRING"),
+        bigquery.SchemaField("optimization_score", "FLOAT"),
+        bigquery.SchemaField("advertising_channel_type", "STRING"),
+        bigquery.SchemaField("bidding_strategy_type", "STRING"),
+        bigquery.SchemaField("date", "DATE")
+    ]
 
     try:
         client.delete_table(temp_table_ref, not_found_ok=True)
-        logger.info("🧹 Deleted existing campaigns_temp table")
-
-        new_schema = [
-            bigquery.SchemaField("campaign_id", "STRING"),
-            bigquery.SchemaField("campaign_name", "STRING"),
-            bigquery.SchemaField("status", "STRING"),
-            bigquery.SchemaField("optimization_score", "FLOAT"),
-            bigquery.SchemaField("advertising_channel_type", "STRING"),
-            bigquery.SchemaField("bidding_strategy_type", "STRING"),
-            bigquery.SchemaField("date", "DATE"),
-        ]
-
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
@@ -770,26 +730,22 @@ def migrate_campaigns_schema():
             status,
             advertising_channel_type,
             bidding_strategy_type,
+            NULL AS optimization_score,
             date
-        FROM `{PROJECT_ID}.{DATASET_ID}.campaigns`
+        FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
         """
 
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
+        job_config = bigquery.QueryJobConfig(destination=temp_table_ref, write_disposition="WRITE_TRUNCATE")
         client.query(query, job_config=job_config).result()
 
         client.delete_table(table_ref, not_found_ok=True)
-        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+        create_partitioned_clustered_table(table_name, new_schema)
         client.copy_table(temp_table_ref, table_ref)
         client.delete_table(temp_table_ref)
-
-        logger.info("✅ Successfully migrated campaigns table schema")
+        logger.info(f"✅ Successfully migrated {table_name} schema with partitioning and clustering")
 
     except Exception as e:
-        logger.error(f"❌ Failed to migrate campaigns schema: {str(e)}")
+        logger.error(f"❌ Failed to migrate {table_name} schema: {str(e)}")
         raise
 
 
