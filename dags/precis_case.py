@@ -3,6 +3,7 @@ from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 from airflow.models import Variable
 from airflow.utils.email import send_email
+from airflow.providers.cncf.kubernetes.operators.kubernetes_pod import KubernetesPodOperator
 from google.cloud import bigquery
 from datetime import datetime, timedelta
 import pandas as pd
@@ -985,13 +986,20 @@ with DAG(
     )
 
     # ✅ dbt run command
-    dbt_run = BashOperator(
-        task_id="run_dbt_build",
-        bash_command="dbt build --project-dir /home/airflow/gcs/dags/dbt_project --profiles-dir /home/airflow/.dbt",
-        execution_timeout=timedelta(hours=1),
-        retries=1
+   
+    dbt_run = KubernetesPodOperator(
+    task_id="run_dbt_build",
+    name="dbt-run",
+    namespace="default",
+    image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/dbt-repo/dbt-runner:latest",
+    cmds=["dbt"],
+    arguments=["build"],
+    get_logs=True,
+    is_delete_operator_pod=True,
+    execution_timeout=timedelta(hours=1),
+    retries=1
     )
-
+    
     # ✅ DAG dependencies
     init_tables >> schema_migrations >> [
         extract_load_campaigns,
