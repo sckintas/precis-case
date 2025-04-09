@@ -275,13 +275,12 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
     return True
 
-
 def create_bigquery_tables():
     """Ensure all BigQuery tables are created with proper partitioning and clustering."""
     create_metadata_table()
 
     for table_name, schema_fields in TABLE_SCHEMAS.items():
-        table_ref = client.dataset(DATASET_ID).table(table_name)
+        table_id = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"
         schema = [
             bigquery.SchemaField(
                 name=field["name"],
@@ -295,7 +294,7 @@ def create_bigquery_tables():
 
         try:
             # Check if table exists
-            existing_table = client.get_table(table_ref)
+            existing_table = client.get_table(table_id)
             
             # Verify if partitioning and clustering match our desired configuration
             current_partition = existing_table.time_partitioning.field if existing_table.time_partitioning else None
@@ -308,32 +307,61 @@ def create_bigquery_tables():
                 
             # If settings don't match, we need to recreate the table
             logger.info(f"Recreating table {table_name} to update partitioning/clustering")
-            client.delete_table(table_ref)
+            
+            # First create the new table with correct settings
+            new_table = bigquery.Table(table_id, schema=schema)
+            
+            if partition_field:
+                new_table.time_partitioning = bigquery.TimePartitioning(
+                    type_=bigquery.TimePartitioningType.DAY,
+                    field=partition_field
+                )
+            
+            if clustering_fields:
+                new_table.clustering_fields = clustering_fields
+                
+            # Create the new table
+            client.create_table(new_table)
+            
+            # Copy data from old table if it exists
+            try:
+                query = f"SELECT * FROM `{table_id}_old`"
+                job_config = bigquery.QueryJobConfig(
+                    destination=table_id,
+                    write_disposition="WRITE_APPEND"
+                )
+                client.query(query, job_config=job_config).result()
+                client.delete_table(f"{table_id}_old")
+            except Exception:
+                logger.info("No existing data to migrate")
+                
+            logger.info(f"Successfully recreated table {table_name} with updated partitioning/clustering")
             
         except Exception as e:
-            # Table doesn't exist or other error
+            # Table doesn't exist - create it with proper settings
             logger.info(f"Creating new table {table_name}: {str(e)}")
+            table = bigquery.Table(table_id, schema=schema)
+            
+            # Set partitioning if specified
+            if partition_field:
+                table.time_partitioning = bigquery.TimePartitioning(
+                    type_=bigquery.TimePartitioningType.DAY,
+                    field=partition_field
+                )
+                logger.info(f"Setting partitioning on {table_name} by {partition_field}")
+            
+            # Set clustering if specified
+            if clustering_fields:
+                table.clustering_fields = clustering_fields
+                logger.info(f"Setting clustering on {table_name} by {clustering_fields}")
+            
+            # Create the table
+            client.create_table(table)
+            logger.info(f"Successfully created table {table_name} with partitioning and clustering")
 
-        # Create new table with proper settings
-        table = bigquery.Table(table_ref, schema=schema)
-        
-        # Set partitioning if specified
-        if partition_field:
-            table.time_partitioning = bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY,
-                field=partition_field
-            )
-            logger.info(f"Setting partitioning on {table_name} by {partition_field}")
-        
-        # Set clustering if specified
-        if clustering_fields:
-            table.clustering_fields = clustering_fields
-            logger.info(f"Setting clustering on {table_name} by {clustering_fields}")
-        
-        # Create the table
-        client.create_table(table)
-        logger.info(f"Successfully created table {table_name} with partitioning and clustering")
-        
+
+
+
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
     """Validate the incoming data for missing fields and invalid values."""
     required_fields = REQUIRED_FIELDS.get(table_name, [])
