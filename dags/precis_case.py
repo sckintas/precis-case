@@ -987,18 +987,18 @@ with DAG(
 
     # ✅ dbt run command
    
-    dbt_run = KubernetesPodOperator(
-    task_id="run_dbt_build",
-    name="dbt-run",
-    namespace="default",
+  
+    run_dbt_model = KubernetesPodOperator(
+    task_id="run_dbt_model",
+    name="dbt-model-runner",
+    namespace="airflow",
     image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/dbt-repo/dbt-runner:latest",
     cmds=["dbt"],
-    arguments=["build"],
+    arguments=["run", "--project-dir", "/dbt"],
     get_logs=True,
     is_delete_operator_pod=True,
-    execution_timeout=timedelta(hours=1),
-    retries=1
-    )
+    in_cluster=True
+)
     
     # ✅ DAG dependencies
     init_tables >> schema_migrations >> [
