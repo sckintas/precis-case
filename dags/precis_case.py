@@ -86,6 +86,14 @@ TABLE_SCHEMAS = {
     ]
 }
 
+REFERENCE_FIELDS = {
+    "campaigns": "date",
+    "ad_groups": "date",
+    "ads": "date",
+    "metrics": "date",
+    "budgets": "date"
+}
+
 # Partitioning fields
 PARTITION_FIELDS = {
     "campaigns": "date",
