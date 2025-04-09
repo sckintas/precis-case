@@ -516,9 +516,7 @@ def migrate_metrics_schema():
     temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
 
     new_schema = [
-        bigquery.SchemaField("campaign_id", "STRING"),
         bigquery.SchemaField("ad_group_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("ad_id", "STRING"),
         bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
         bigquery.SchemaField("impressions", "INTEGER"),
         bigquery.SchemaField("clicks", "INTEGER"),
@@ -526,30 +524,30 @@ def migrate_metrics_schema():
         bigquery.SchemaField("average_cpc", "FLOAT"),
         bigquery.SchemaField("cost_micros", "INTEGER"),
         bigquery.SchemaField("conversions", "FLOAT"),
+        # Add optional fields if you will populate them later
+        bigquery.SchemaField("campaign_id", "STRING"),
+        bigquery.SchemaField("ad_id", "STRING")
     ]
 
     try:
-        # Delete temp table if exists
         client.delete_table(temp_table_ref, not_found_ok=True)
         logger.info("🧹 Deleted existing metrics_temp table")
 
-        # Create temp table with new schema
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
-        # Copy data with safe casting
         query = f"""
         SELECT 
-            CAST(campaign_id AS STRING) AS campaign_id,
             CAST(ad_group_id AS STRING) AS ad_group_id,
-            CAST(ad_id AS STRING) AS ad_id,
             DATE(date) AS date,
             impressions,
             clicks,
             ctr,
             average_cpc,
             cost_micros,
-            conversions
+            conversions,
+            NULL AS campaign_id,
+            NULL AS ad_id
         FROM `{PROJECT_ID}.{DATASET_ID}.metrics`
         """
 
@@ -560,7 +558,6 @@ def migrate_metrics_schema():
 
         client.query(query, job_config=job_config).result()
 
-        # Replace original table
         client.delete_table(table_ref, not_found_ok=True)
         client.create_table(bigquery.Table(table_ref, schema=new_schema))
         client.copy_table(temp_table_ref, table_ref)
@@ -571,6 +568,7 @@ def migrate_metrics_schema():
     except Exception as e:
         logger.error(f"❌ Failed to migrate metrics schema: {str(e)}")
         raise
+
 
 
 def migrate_ad_groups_schema():
