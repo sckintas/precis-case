@@ -284,7 +284,9 @@ def create_bigquery_tables():
     create_metadata_table()
 
     for table_name, schema_fields in TABLE_SCHEMAS.items():
+        # Correct BigQuery TableReference
         table_ref = bigquery.DatasetReference(PROJECT_ID, DATASET_ID).table(table_name)
+        full_table_id = f"{PROJECT_ID}.{DATASET_ID}.{table_name}"  # For logs and backup
         schema = [
             bigquery.SchemaField(
                 name=field["name"],
@@ -297,37 +299,34 @@ def create_bigquery_tables():
         clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
 
         try:
-            existing_table = client.get_table(table_id)
+            existing_table = client.get_table(table_ref)
             current_partition = (
                 existing_table.time_partitioning.field
                 if existing_table.time_partitioning else None
             )
             current_cluster = existing_table.clustering_fields or []
 
-            # Check if schema/config matches
             if current_partition == partition_field and set(current_cluster) == set(clustering_fields):
                 logger.info(f"✅ Table {table_name} already exists with correct config.")
                 continue
 
-            # Mismatch detected: Backup, delete, and recreate
+            # Mismatch: backup, delete, and recreate
             logger.warning(f"⚠️ Table {table_name} has incorrect partitioning or clustering.")
             logger.info(f"    - Existing partition: {current_partition}, Expected: {partition_field}")
             logger.info(f"    - Existing clustering: {current_cluster}, Expected: {clustering_fields}")
 
-            backup_table_id = f"{table_id}_backup_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-            client.copy_table(table_id, backup_table_id)
-            logger.info(f"📦 Backed up {table_id} to {backup_table_id}")
+            backup_table_id = f"{full_table_id}_backup_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+            client.copy_table(existing_table, backup_table_id)
+            logger.info(f"📦 Backed up {full_table_id} to {backup_table_id}")
 
-            client.delete_table(table_id, not_found_ok=True)
-            logger.info(f"🧹 Deleted old table: {table_name}")
+            client.delete_table(table_ref, not_found_ok=True)
+            logger.info(f"🧹 Deleted old table: {full_table_id}")
 
         except Exception as e:
-            logger.info(f"ℹ️ Table {table_name} does not exist or error occurred while checking: {str(e)}")
+            logger.info(f"ℹ️ Table {table_name} does not exist or couldn't be accessed: {str(e)}")
 
         try:
-            # Create new table with correct schema
             new_table = bigquery.Table(table_ref, schema=schema)
-
 
             if partition_field:
                 new_table.time_partitioning = bigquery.TimePartitioning(
@@ -339,10 +338,11 @@ def create_bigquery_tables():
                 new_table.clustering_fields = clustering_fields
 
             client.create_table(new_table)
-            logger.info(f"✅ Created table {table_name} with partitioning on '{partition_field}' and clustering on {clustering_fields}")
+            logger.info(f"✅ Created table {full_table_id} with partitioning on '{partition_field}' and clustering on {clustering_fields}")
 
         except Exception as e:
-            logger.error(f"❌ Failed to create table {table_name}: {str(e)}")
+            logger.error(f"❌ Failed to create table {full_table_id}: {str(e)}")
+
 
 
 
