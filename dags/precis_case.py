@@ -277,7 +277,7 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 
 def create_bigquery_tables():
-    """Ensure all BigQuery tables are recreated if partitioning/clustering is incorrect."""
+    """Ensure all BigQuery tables are created with proper partitioning and clustering."""
     create_metadata_table()
 
     for table_name, schema_fields in TABLE_SCHEMAS.items():
@@ -294,41 +294,46 @@ def create_bigquery_tables():
         clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
 
         try:
-            table = client.get_table(table_ref)
-            current_partition_field = table.time_partitioning.field if table.time_partitioning else None
-            current_clustering = table.clustering_fields or []
-
-            # ✅ RECREATE if partitioning or clustering is missing/wrong
-            if current_partition_field != partition_field or set(current_clustering) != set(clustering_fields):
-                logger.warning(f"♻️ Recreating table {table_name} due to incorrect partitioning or clustering.")
-                client.delete_table(table_ref, not_found_ok=True)
-
-                new_table = bigquery.Table(table_ref, schema=schema)
-                new_table.time_partitioning = bigquery.TimePartitioning(
-                    type_=bigquery.TimePartitioningType.DAY,
-                    field=partition_field
-                )
-                if clustering_fields:
-                    new_table.clustering_fields = clustering_fields
-                client.create_table(new_table)
-
-                logger.info(f"✅ Recreated table {table_name} with correct partitioning and clustering.")
-            else:
-                logger.info(f"✅ Table {table_name} already correctly configured.")
-
+            # Check if table exists
+            existing_table = client.get_table(table_ref)
+            
+            # Verify if partitioning and clustering match our desired configuration
+            current_partition = existing_table.time_partitioning.field if existing_table.time_partitioning else None
+            current_cluster = existing_table.clustering_fields if existing_table.clustering_fields else []
+            
+            if (current_partition == partition_field and 
+                set(current_cluster) == set(clustering_fields)):
+                logger.info(f"Table {table_name} already exists with correct partitioning/clustering")
+                continue
+                
+            # If settings don't match, we need to recreate the table
+            logger.info(f"Recreating table {table_name} to update partitioning/clustering")
+            client.delete_table(table_ref)
+            
         except Exception as e:
-            logger.warning(f"📁 Creating table {table_name} (not found or error): {e}")
-            table = bigquery.Table(table_ref, schema=schema)
+            # Table doesn't exist or other error
+            logger.info(f"Creating new table {table_name}: {str(e)}")
+
+        # Create new table with proper settings
+        table = bigquery.Table(table_ref, schema=schema)
+        
+        # Set partitioning if specified
+        if partition_field:
             table.time_partitioning = bigquery.TimePartitioning(
                 type_=bigquery.TimePartitioningType.DAY,
                 field=partition_field
             )
-            if clustering_fields:
-                table.clustering_fields = clustering_fields
-            client.create_table(table)
-            logger.info(f"✅ Created table {table_name} with partitioning and clustering.")
-
-
+            logger.info(f"Setting partitioning on {table_name} by {partition_field}")
+        
+        # Set clustering if specified
+        if clustering_fields:
+            table.clustering_fields = clustering_fields
+            logger.info(f"Setting clustering on {table_name} by {clustering_fields}")
+        
+        # Create the table
+        client.create_table(table)
+        logger.info(f"Successfully created table {table_name} with partitioning and clustering")
+        
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
     """Validate the incoming data for missing fields and invalid values."""
     required_fields = REQUIRED_FIELDS.get(table_name, [])
