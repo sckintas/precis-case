@@ -276,7 +276,11 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
     return True
 
 def create_bigquery_tables():
-    """Ensure all BigQuery tables are created with proper partitioning and clustering."""
+    """
+    Ensure all BigQuery tables are created with proper schema,
+    partitioning, and clustering. If tables exist with incorrect
+    config, they will be backed up, deleted, and recreated.
+    """
     create_metadata_table()
 
     for table_name, schema_fields in TABLE_SCHEMAS.items():
@@ -293,72 +297,51 @@ def create_bigquery_tables():
         clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
 
         try:
-            # Check if table exists
             existing_table = client.get_table(table_id)
-            
-            # Verify if partitioning and clustering match our desired configuration
-            current_partition = existing_table.time_partitioning.field if existing_table.time_partitioning else None
-            current_cluster = existing_table.clustering_fields if existing_table.clustering_fields else []
-            
-            if (current_partition == partition_field and 
-                set(current_cluster) == set(clustering_fields)):
-                logger.info(f"Table {table_name} already exists with correct partitioning/clustering")
+            current_partition = (
+                existing_table.time_partitioning.field
+                if existing_table.time_partitioning else None
+            )
+            current_cluster = existing_table.clustering_fields or []
+
+            # Check if schema/config matches
+            if current_partition == partition_field and set(current_cluster) == set(clustering_fields):
+                logger.info(f"✅ Table {table_name} already exists with correct config.")
                 continue
-                
-            # If settings don't match, we need to recreate the table
-            logger.info(f"Recreating table {table_name} to update partitioning/clustering")
-            
-            # First create the new table with correct settings
+
+            # Mismatch detected: Backup, delete, and recreate
+            logger.warning(f"⚠️ Table {table_name} has incorrect partitioning or clustering.")
+            logger.info(f"    - Existing partition: {current_partition}, Expected: {partition_field}")
+            logger.info(f"    - Existing clustering: {current_cluster}, Expected: {clustering_fields}")
+
+            backup_table_id = f"{table_id}_backup_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+            client.copy_table(table_id, backup_table_id)
+            logger.info(f"📦 Backed up {table_id} to {backup_table_id}")
+
+            client.delete_table(table_id, not_found_ok=True)
+            logger.info(f"🧹 Deleted old table: {table_name}")
+
+        except Exception as e:
+            logger.info(f"ℹ️ Table {table_name} does not exist or error occurred while checking: {str(e)}")
+
+        try:
+            # Create new table with correct schema
             new_table = bigquery.Table(table_id, schema=schema)
-            
+
             if partition_field:
                 new_table.time_partitioning = bigquery.TimePartitioning(
                     type_=bigquery.TimePartitioningType.DAY,
                     field=partition_field
                 )
-            
+
             if clustering_fields:
                 new_table.clustering_fields = clustering_fields
-                
-            # Create the new table
-            client.create_table(new_table)
-            
-            # Copy data from old table if it exists
-            try:
-                query = f"SELECT * FROM `{table_id}_old`"
-                job_config = bigquery.QueryJobConfig(
-                    destination=table_id,
-                    write_disposition="WRITE_APPEND"
-                )
-                client.query(query, job_config=job_config).result()
-                client.delete_table(f"{table_id}_old")
-            except Exception:
-                logger.info("No existing data to migrate")
-                
-            logger.info(f"Successfully recreated table {table_name} with updated partitioning/clustering")
-            
-        except Exception as e:
-            # Table doesn't exist - create it with proper settings
-            logger.info(f"Creating new table {table_name}: {str(e)}")
-            table = bigquery.Table(table_id, schema=schema)
-            
-            # Set partitioning if specified
-            if partition_field:
-                table.time_partitioning = bigquery.TimePartitioning(
-                    type_=bigquery.TimePartitioningType.DAY,
-                    field=partition_field
-                )
-                logger.info(f"Setting partitioning on {table_name} by {partition_field}")
-            
-            # Set clustering if specified
-            if clustering_fields:
-                table.clustering_fields = clustering_fields
-                logger.info(f"Setting clustering on {table_name} by {clustering_fields}")
-            
-            # Create the table
-            client.create_table(table)
-            logger.info(f"Successfully created table {table_name} with partitioning and clustering")
 
+            client.create_table(new_table)
+            logger.info(f"✅ Created table {table_name} with partitioning on '{partition_field}' and clustering on {clustering_fields}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to create table {table_name}: {str(e)}")
 
 
 
