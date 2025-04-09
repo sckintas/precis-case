@@ -274,7 +274,15 @@ def create_bigquery_tables():
 
     for table_name, schema_fields in TABLE_SCHEMAS.items():
         table_ref = client.dataset(DATASET_ID).table(table_name)
-        schema = [bigquery.SchemaField(**field) for field in schema_fields]
+        schema = [
+        bigquery.SchemaField(
+        name=field["name"],
+        field_type=field["type"],  # Corrected from 'type'
+        mode=field.get("mode", "NULLABLE")
+    )
+    for field in schema_fields
+]
+
 
         partition_field = PARTITION_FIELDS.get(table_name)
         clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
