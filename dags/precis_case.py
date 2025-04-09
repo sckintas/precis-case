@@ -277,54 +277,56 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 
 def create_bigquery_tables():
-    """Create or update BigQuery tables with partitioning and clustering."""
-    create_metadata_table()  # Ensure the metadata table exists
+    """Ensure all BigQuery tables are created or recreated with partitioning and clustering."""
+    create_metadata_table()
 
     for table_name, schema_fields in TABLE_SCHEMAS.items():
         table_ref = client.dataset(DATASET_ID).table(table_name)
         schema = [
-        bigquery.SchemaField(
-        name=field["name"],
-        field_type=field["type"],  # Corrected from 'type'
-        mode=field.get("mode", "NULLABLE")
-    )
-    for field in schema_fields
-]
-
+            bigquery.SchemaField(
+                name=field["name"],
+                field_type=field["type"],
+                mode=field.get("mode", "NULLABLE")
+            ) for field in schema_fields
+        ]
 
         partition_field = PARTITION_FIELDS.get(table_name)
         clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
 
         try:
             table = client.get_table(table_ref)
-            logger.info(f"🔍 Table {table_name} exists. Checking partitioning/clustering...")
+            logger.info(f"🔍 Table {table_name} exists. Checking configuration...")
 
-            needs_update = False
+            # If partitioning field is missing or wrong, recreate the table
+            needs_recreate = not table.time_partitioning or (
+                table.time_partitioning.field != partition_field
+            )
 
-            # Check and update partitioning if incorrect
-            if partition_field:
-                if not table.time_partitioning or table.time_partitioning.field != partition_field:
+            if needs_recreate:
+                logger.warning(f"♻️ Recreating {table_name} to apply partitioning.")
+                client.delete_table(table_ref, not_found_ok=True)
+
+                table = bigquery.Table(table_ref, schema=schema)
+                if partition_field:
                     table.time_partitioning = bigquery.TimePartitioning(
                         type_=bigquery.TimePartitioningType.DAY,
                         field=partition_field
                     )
-                    needs_update = True
-
-            # Check and update clustering if incorrect
-            if clustering_fields:
-                if not table.clustering_fields or set(table.clustering_fields) != set(clustering_fields):
+                if clustering_fields:
                     table.clustering_fields = clustering_fields
-                    needs_update = True
 
-            # Update the table if needed
-            if needs_update:
-                client.update_table(table, ["time_partitioning", "clustering_fields"])
-                logger.info(f"🔁 Updated table {table_name} with new partitioning/clustering")
-            else:
-                logger.info(f"✅ Table {table_name} already has correct partitioning/clustering")
+                client.create_table(table)
+                logger.info(f"✅ Recreated {table_name} with partitioning and clustering.")
+                continue  # skip further checks for this table
+
+            # Update clustering if it's wrong
+            if set(table.clustering_fields or []) != set(clustering_fields):
+                table.clustering_fields = clustering_fields
+                client.update_table(table, ["clustering_fields"])
+                logger.info(f"🔁 Updated clustering for {table_name}")
 
         except Exception as e:
-            logger.info(f"📁 Creating new table {table_name}")
+            logger.warning(f"📁 Creating table {table_name} (it may not exist): {e}")
             table = bigquery.Table(table_ref, schema=schema)
 
             if partition_field:
@@ -332,13 +334,11 @@ def create_bigquery_tables():
                     type_=bigquery.TimePartitioningType.DAY,
                     field=partition_field
                 )
-
             if clustering_fields:
                 table.clustering_fields = clustering_fields
 
             client.create_table(table)
-            logger.info(f"✅ Created table {table_name} with partitioning and clustering")
-
+            logger.info(f"✅ Created table {table_name} with partitioning and clustering.")
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
     """Validate the incoming data for missing fields and invalid values."""
@@ -484,7 +484,6 @@ def log_pipeline_metadata(
     error_message: Optional[str] = None,
     execution_date: Optional[Union[datetime, str]] = None
 ):
-    """Log pipeline execution metadata to BigQuery."""
     try:
         if isinstance(execution_date, str):
             execution_date = datetime.fromisoformat(execution_date.replace("Z", "+00:00"))
@@ -494,11 +493,11 @@ def log_pipeline_metadata(
         metadata = {
             "run_id": str(uuid.uuid4()),
             "table_name": table_name,
-            "execution_date": execution_date.isoformat(),
+            "execution_date": execution_date,  # <-- pass as datetime object
             "status": status,
             "rows_processed": rows_processed,
             "error_message": error_message,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.utcnow()
         }
 
         errors = client.insert_rows_json(METADATA_TABLE, [metadata])
