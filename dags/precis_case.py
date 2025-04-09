@@ -611,10 +611,13 @@ def migrate_ad_groups_schema():
         raise
 
 def migrate_ads_schema():
-    """Migrate the ads table schema to STRING types and updated fields."""
-    table_ref = client.dataset(DATASET_ID).table("ads")
+    """Migrate the ads table schema to STRING types and updated fields, preserving partitioning and clustering."""
+    table_name = "ads"
+    table_ref = client.dataset(DATASET_ID).table(table_name)
+    temp_table_ref = client.dataset(DATASET_ID).table(f"{table_name}_temp")
 
     try:
+        # Define new schema
         new_schema = [
             bigquery.SchemaField("ad_id", "STRING"),
             bigquery.SchemaField("ad_group_id", "STRING"),
@@ -623,16 +626,15 @@ def migrate_ads_schema():
             bigquery.SchemaField("date", "DATE")
         ]
 
-        temp_table_ref = client.dataset(DATASET_ID).table("ads_temp")
+        # Delete temp table if exists
         client.delete_table(temp_table_ref, not_found_ok=True)
+        logger.info("🧹 Deleted existing ads_temp table")
+
+        # Create temp table
         temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
         client.create_table(temp_table)
 
-        job_config = bigquery.QueryJobConfig(
-            destination=temp_table_ref,
-            write_disposition="WRITE_TRUNCATE"
-        )
-
+        # Copy data with casted schema into temp table
         query = f"""
         SELECT 
             CAST(ad_id AS STRING) AS ad_id,
@@ -640,15 +642,43 @@ def migrate_ads_schema():
             headline,
             status,
             date
-        FROM `{PROJECT_ID}.{DATASET_ID}.ads`
+        FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
         """
-
+        job_config = bigquery.QueryJobConfig(
+            destination=temp_table_ref,
+            write_disposition="WRITE_TRUNCATE"
+        )
         client.query(query, job_config=job_config).result()
 
+        # Delete old table
         client.delete_table(table_ref, not_found_ok=True)
-        client.create_table(bigquery.Table(table_ref, schema=new_schema))
+
+        # Prepare new table with partitioning + clustering
+        table = bigquery.Table(table_ref, schema=new_schema)
+
+        partition_field = PARTITION_FIELDS.get(table_name)
+        clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
+
+        if partition_field:
+            table.time_partitioning = bigquery.TimePartitioning(
+                type_=bigquery.TimePartitioningType.DAY,
+                field=partition_field
+            )
+
+        if clustering_fields:
+            table.clustering_fields = clustering_fields
+
+        # Create new table
+        client.create_table(table)
+        logger.info(f"✅ Created {table_name} table with partitioning on '{partition_field}' and clustering on {clustering_fields}")
+
+        # Copy data from temp to new table
         client.copy_table(temp_table_ref, table_ref)
+        logger.info("📤 Copied data from ads_temp to ads")
+
+        # Delete temp table
         client.delete_table(temp_table_ref)
+        logger.info("🧹 Deleted ads_temp")
 
         logger.info("✅ Successfully migrated ads table schema")
 
