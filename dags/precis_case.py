@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 from typing import Union, Optional
 import tempfile
 from airflow.utils.task_group import TaskGroup
+from datetime import datetime
 
 
 logger = logging.getLogger("airflow")
@@ -42,7 +43,6 @@ MOCK_API_URLS = {
     "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
     "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
 }
-
 # Schema definitions for each table
 TABLE_SCHEMAS = {
     "campaigns": [
@@ -113,42 +113,30 @@ REQUIRED_FIELDS = {
     "budgets": ["budget_id", "date"] 
 }
 
-def log_pipeline_metadata(
-    table_name: str,
-    status: str,
-    rows_processed: int = 0,
-    error_message: Optional[str] = None,
-    execution_date: Optional[datetime] = None
-):
-    """Log pipeline execution metadata to BigQuery."""
+
+
+
+def create_metadata_table():
+    """Create the metadata table if it doesn't exist."""
+    schema = [
+        bigquery.SchemaField("run_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("table_name", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("execution_date", "TIMESTAMP", mode="REQUIRED"),
+        bigquery.SchemaField("status", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("rows_processed", "INTEGER"),
+        bigquery.SchemaField("error_message", "STRING"),
+        bigquery.SchemaField("timestamp", "TIMESTAMP", mode="REQUIRED")
+    ]
     
-    # Check if execution_date is a string and convert it to datetime
-    if isinstance(execution_date, str):
-        try:
-            execution_date = datetime.strptime(execution_date, "%Y-%m-%dT%H:%M:%S")
-        except ValueError:
-            execution_date = datetime.utcnow()  # Default to UTC if the format is wrong
-
-    # Handle execution_date, now guaranteed to be a datetime object
-    exec_date = execution_date or datetime.utcnow()
-
-    metadata = {
-        "run_id": str(uuid.uuid4()),
-        "table_name": table_name,
-        "execution_date": exec_date.isoformat(),  # Safely call isoformat now
-        "status": status,
-        "rows_processed": rows_processed,
-        "error_message": error_message,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
+    table_ref = client.dataset(DATASET_ID).table("pipeline_metadata")
+    table = bigquery.Table(table_ref, schema=schema)
+    
     try:
-        errors = client.insert_rows_json(METADATA_TABLE, [metadata])
-        if errors:
-            logger.error(f"❌ Failed to log metadata: {errors}")
-    except Exception as e:
-        logger.error(f"❌ Error logging metadata: {str(e)}")
-
+        client.get_table(table_ref)
+        logger.info("Metadata table already exists")
+    except Exception:
+        client.create_table(table)
+        logger.info("Created metadata table")
 
 def notify_failure(context):
     """Send email notification on task failure."""
@@ -282,62 +270,58 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 def create_bigquery_tables():
     """Create or update BigQuery tables with partitioning and clustering."""
-    create_metadata_table()  # Ensure metadata table exists
-    
-    for table_name in TABLE_SCHEMAS.keys():
+    create_metadata_table()  # Ensure the metadata table exists
+
+    for table_name, schema_fields in TABLE_SCHEMAS.items():
         table_ref = client.dataset(DATASET_ID).table(table_name)
-        schema = [bigquery.SchemaField(**field) for field in TABLE_SCHEMAS[table_name]]
-        
+        schema = [bigquery.SchemaField(**field) for field in schema_fields]
+
         partition_field = PARTITION_FIELDS.get(table_name)
         clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
-        
+
         try:
-            # Check if table exists
             table = client.get_table(table_ref)
-            logger.info(f"Table {table_name} exists, updating if needed")
-            
-            # Update table configuration if needed
+            logger.info(f"🔍 Table {table_name} exists. Checking partitioning/clustering...")
+
             needs_update = False
-            new_config = table._properties
-            
-            # Update partitioning if needed
+
+            # Check and update partitioning if incorrect
             if partition_field:
                 if not table.time_partitioning or table.time_partitioning.field != partition_field:
-                    new_config["timePartitioning"] = {
-                        "type": "DAY",
-                        "field": partition_field
-                    }
+                    table.time_partitioning = bigquery.TimePartitioning(
+                        type_=bigquery.TimePartitioningType.DAY,
+                        field=partition_field
+                    )
                     needs_update = True
-            
-            # Update clustering if needed
+
+            # Check and update clustering if incorrect
             if clustering_fields:
                 if not table.clustering_fields or set(table.clustering_fields) != set(clustering_fields):
-                    new_config["clustering"] = {
-                        "fields": clustering_fields
-                    }
+                    table.clustering_fields = clustering_fields
                     needs_update = True
-            
+
+            # Update the table if needed
             if needs_update:
-                table._properties = new_config
-                client.update_table(table, fields=["timePartitioning", "clustering"])
-                logger.info(f"Updated table {table_name} configuration")
-            
+                client.update_table(table, ["time_partitioning", "clustering_fields"])
+                logger.info(f"🔁 Updated table {table_name} with new partitioning/clustering")
+            else:
+                logger.info(f"✅ Table {table_name} already has correct partitioning/clustering")
+
         except Exception as e:
-            # Table doesn't exist, create it
-            logger.info(f"Creating new table {table_name}")
+            logger.info(f"📁 Creating new table {table_name}")
             table = bigquery.Table(table_ref, schema=schema)
-            
+
             if partition_field:
                 table.time_partitioning = bigquery.TimePartitioning(
                     type_=bigquery.TimePartitioningType.DAY,
                     field=partition_field
                 )
-            
+
             if clustering_fields:
                 table.clustering_fields = clustering_fields
-            
+
             client.create_table(table)
-            logger.info(f"Created table {table_name} with partitioning and clustering")
+            logger.info(f"✅ Created table {table_name} with partitioning and clustering")
 
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
@@ -477,7 +461,6 @@ def extract_and_load(table: str, execution_date: datetime):
         logger.error(f"❌ Error processing {table}: {str(e)}")
 
 
-
 def log_pipeline_metadata(
     table_name: str,
     status: str,
@@ -487,114 +470,53 @@ def log_pipeline_metadata(
 ):
     """Log pipeline execution metadata to BigQuery."""
     try:
-        # Handle execution_date conversion
         if isinstance(execution_date, str):
-            try:
-                exec_date = datetime.fromisoformat(execution_date.replace("Z", "+00:00"))
-            except ValueError:
-                exec_date = datetime.utcnow()
-        elif isinstance(execution_date, datetime):
-            exec_date = execution_date
-        else:
-            exec_date = datetime.utcnow()
-        
-        # Prepare metadata
+            execution_date = datetime.fromisoformat(execution_date.replace("Z", "+00:00"))
+        elif not isinstance(execution_date, datetime):
+            execution_date = datetime.utcnow()
+
         metadata = {
             "run_id": str(uuid.uuid4()),
             "table_name": table_name,
-            "execution_date": exec_date.isoformat(),
+            "execution_date": execution_date.isoformat(),
             "status": status,
             "rows_processed": rows_processed,
             "error_message": error_message,
             "timestamp": datetime.utcnow().isoformat()
         }
-        
-        # Insert into BigQuery
+
         errors = client.insert_rows_json(METADATA_TABLE, [metadata])
         if errors:
-            logger.error(f"Failed to log metadata: {errors}")
+            logger.error(f"❌ Failed to log metadata: {errors}")
         else:
-            logger.info(f"Logged metadata for {table_name} with status {status}")
-            
+            logger.info(f"✅ Logged metadata for {table_name} [{status}]")
+
     except Exception as e:
-        logger.error(f"Error logging metadata: {str(e)}")
+        logger.error(f"❌ Error logging metadata: {str(e)}")
+
 
 def migrate_metrics_schema():
-    """Migrate the metrics table schema without creating a temp table."""
+    """Migrate metrics table schema in place without temp table."""
     table_ref = client.dataset(DATASET_ID).table("metrics")
-    
+
+    new_schema = [
+        bigquery.SchemaField("campaign_id", "STRING"),
+        bigquery.SchemaField("ad_group_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("ad_id", "STRING"),
+        bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
+        bigquery.SchemaField("impressions", "INTEGER"),
+        bigquery.SchemaField("clicks", "INTEGER"),
+        bigquery.SchemaField("ctr", "FLOAT"),
+        bigquery.SchemaField("average_cpc", "FLOAT"),
+        bigquery.SchemaField("cost_micros", "INTEGER"),
+        bigquery.SchemaField("conversions", "FLOAT"),
+    ]
+
     try:
-        # Get current table
         table = client.get_table(table_ref)
-        
-        # Define new schema
-        new_schema = [
-            bigquery.SchemaField("ad_group_id", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
-            bigquery.SchemaField("clicks", "INTEGER"),
-            bigquery.SchemaField("impressions", "INTEGER"),
-            bigquery.SchemaField("ctr", "FLOAT"),
-            bigquery.SchemaField("average_cpc", "FLOAT"),
-            bigquery.SchemaField("cost_micros", "INTEGER"),
-            bigquery.SchemaField("conversions", "FLOAT")
-        ]
-        
-        # Update table schema in place
         table.schema = new_schema
         client.update_table(table, ["schema"])
-        
-        logger.info("Successfully migrated metrics table schema")
-        
-    except Exception as e:
-        logger.error(f"Failed to migrate metrics schema: {str(e)}")
-        raise
-
-        # Build new schema with correct types
-        new_schema = [
-            bigquery.SchemaField("campaign_id", "STRING"),
-            bigquery.SchemaField("ad_group_id", "STRING"),
-            bigquery.SchemaField("ad_id", "STRING"),
-            bigquery.SchemaField("date", "DATE"),
-            bigquery.SchemaField("impressions", "INTEGER"),
-            bigquery.SchemaField("clicks", "INTEGER"),
-            bigquery.SchemaField("ctr", "FLOAT"),
-            bigquery.SchemaField("average_cpc", "FLOAT"),
-            bigquery.SchemaField("cost_micros", "INTEGER"),
-            bigquery.SchemaField("conversions", "FLOAT")
-        ]
-
-        # Create temp table with new schema and same partitioning/clustering
-        client.delete_table(temp_table_ref, not_found_ok=True)
-        temp_table = bigquery.Table(temp_table_ref, schema=new_schema)
-        
-        if partition_field:
-            temp_table.time_partitioning = bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY,
-                field=partition_field
-            )
-        
-        if clustering_fields:
-            temp_table.clustering_fields = clustering_fields
-            
-        client.create_table(temp_table)
-
-        # Rest of your migration code remains the same...
-        # After copying to the new table, reapply partitioning/clustering
-        
-        final_table = client.get_table(table_ref)
-        if partition_field and not final_table.time_partitioning:
-            final_table.time_partitioning = bigquery.TimePartitioning(
-                type_=bigquery.TimePartitioningType.DAY,
-                field=partition_field
-            )
-            client.update_table(final_table, ["time_partitioning"])
-            
-        if clustering_fields and not final_table.clustering_fields:
-            final_table.clustering_fields = clustering_fields
-            client.update_table(final_table, ["clustering_fields"])
-
-        logger.info("✅ Successfully migrated metrics table schema with preserved partitioning/clustering")
-
+        logger.info("✅ Successfully updated metrics schema in-place")
     except Exception as e:
         logger.error(f"❌ Failed to migrate metrics schema: {str(e)}")
         raise
@@ -952,18 +874,43 @@ with DAG(
         execution_timeout=timedelta(minutes=10)
     )
 
-    # Schema migrations
-    migrate_schemas = PythonOperator(
-        task_id="migrate_schemas",
-        python_callable=lambda: None,  # Replace with your migration logic
-        execution_timeout=timedelta(minutes=15)
-    )
+    # ✅ Grouped BigQuery schema migration tasks
+    with TaskGroup("schema_migrations", tooltip="BigQuery schema migrations") as schema_migrations:
+        migrate_metrics_schema = PythonOperator(
+            task_id="migrate_metrics_schema",
+            python_callable=migrate_metrics_schema,
+            execution_timeout=timedelta(minutes=15)
+        )
 
-    # Data extraction and loading tasks
+        migrate_ad_groups_schema_task = PythonOperator(
+            task_id="migrate_ad_groups_schema",
+            python_callable=migrate_ad_groups_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
+
+        migrate_ads_schema_task = PythonOperator(
+            task_id="migrate_ads_schema",
+            python_callable=migrate_ads_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
+
+        migrate_budgets_schema_task = PythonOperator(
+            task_id="migrate_budgets_schema",
+            python_callable=migrate_budgets_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
+
+        migrate_campaigns_schema_task = PythonOperator(
+            task_id="migrate_campaigns_schema",
+            python_callable=migrate_campaigns_schema,
+            execution_timeout=timedelta(minutes=10)
+        )
+
+    # ✅ Data extraction and loading tasks
     extract_load_campaigns = PythonOperator(
         task_id="extract_load_campaigns",
         python_callable=extract_and_load,
-        op_kwargs={"table": "campaigns", "execution_date": "{{ execution_date.isoformat() }}"},
+        op_kwargs={"table": "campaigns", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -971,7 +918,7 @@ with DAG(
     extract_load_ad_groups = PythonOperator(
         task_id="extract_load_ad_groups",
         python_callable=extract_and_load,
-        op_kwargs={"table": "ad_groups", "execution_date": "{{ execution_date.isoformat() }}"},
+        op_kwargs={"table": "ad_groups", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -979,28 +926,28 @@ with DAG(
     extract_load_ads = PythonOperator(
         task_id="extract_load_ads",
         python_callable=extract_and_load,
-        op_kwargs={"table": "ads", "execution_date": "{{ execution_date.isoformat() }}"},
+        op_kwargs={"table": "ads", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
 
     extract_load_metrics = PythonOperator(
-        task_id="extract_load_metrics",
-        python_callable=extract_and_load,
-        op_kwargs={"table": "metrics", "execution_date": "{{ execution_date.isoformat() }}"},
-        execution_timeout=timedelta(minutes=30),
-        retries=1
-    )
+    task_id="extract_load_metrics",
+    python_callable=extract_and_load,
+    op_kwargs={"table": "metrics", "execution_date": "{{ execution_date.isoformat() }}"},
+    execution_timeout=timedelta(minutes=30),
+    retries=1
+)
 
     extract_load_budgets = PythonOperator(
         task_id="extract_load_budgets",
         python_callable=extract_and_load,
-        op_kwargs={"table": "budgets", "execution_date": "{{ execution_date.isoformat() }}"},
+        op_kwargs={"table": "budgets", "execution_date": "{{ execution_date }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
 
-    # dbt run command
+    # ✅ dbt run command
     dbt_run = BashOperator(
         task_id="run_dbt_build",
         bash_command="dbt build --project-dir /home/airflow/gcs/dags/dbt_project --profiles-dir /home/airflow/.dbt",
@@ -1008,8 +955,17 @@ with DAG(
         retries=1
     )
 
-    # DAG dependencies
-    init_tables >> migrate_schemas >> [
+    # ✅ DAG dependencies
+    init_tables >> schema_migrations >> [
+        extract_load_campaigns,
+        extract_load_ad_groups,
+        extract_load_ads,
+        extract_load_metrics,
+        extract_load_budgets
+    ]
+
+    # Run dbt after all the data loading tasks are complete
+    [
         extract_load_campaigns,
         extract_load_ad_groups,
         extract_load_ads,
