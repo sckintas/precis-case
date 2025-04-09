@@ -42,55 +42,52 @@ MOCK_API_URLS = {
     "metrics": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/metrics.json",
     "budgets": "https://raw.githubusercontent.com/sckintas/preciscase-mock-google-ads-api/main/precis/budgets.json"
 }
+
 # Schema definitions for each table
 TABLE_SCHEMAS = {
     "campaigns": [
-        {"name": "campaign_id", "type": "STRING"},
+        {"name": "campaign_id", "type": "STRING", "mode": "REQUIRED"},
         {"name": "campaign_name", "type": "STRING"},
         {"name": "status", "type": "STRING"},
         {"name": "advertising_channel_type", "type": "STRING"},
         {"name": "bidding_strategy_type", "type": "STRING"},
         {"name": "budget_id", "type": "STRING"},
-        {"name": "date", "type": "DATE"}
+        {"name": "date", "type": "DATE", "mode": "REQUIRED"}
     ],
-
-
     "ad_groups": [
-        {"name": "ad_group_id", "type": "STRING"},
-        {"name": "campaign_id", "type": "STRING"},
+        {"name": "ad_group_id", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "campaign_id", "type": "STRING", "mode": "REQUIRED"},
         {"name": "ad_group_name", "type": "STRING"},
         {"name": "status", "type": "STRING"},
-        {"name": "date", "type": "DATE"}
+        {"name": "date", "type": "DATE", "mode": "REQUIRED"}
     ],
     "ads": [
-        {"name": "ad_id", "type": "STRING"},
-        {"name": "ad_group_id", "type": "STRING"},
+        {"name": "ad_id", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "ad_group_id", "type": "STRING", "mode": "REQUIRED"},
         {"name": "headline", "type": "STRING"},
         {"name": "status", "type": "STRING"},
-        {"name": "date", "type": "DATE"}
+        {"name": "date", "type": "DATE", "mode": "REQUIRED"}
     ],
-
-
     "metrics": [
-        {"name": "ad_group_id", "type": "STRING"},
-        {"name": "date", "type": "DATE"},
+        {"name": "ad_group_id", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "date", "type": "DATE", "mode": "REQUIRED"},
         {"name": "clicks", "type": "INTEGER"},
         {"name": "impressions", "type": "INTEGER"},
         {"name": "ctr", "type": "FLOAT"},
-        {"name": "average_cpc", "type": "FLOAT"},  # Changed from INTEGER to FLOAT
+        {"name": "average_cpc", "type": "FLOAT"},
         {"name": "cost_micros", "type": "INTEGER"},
         {"name": "conversions", "type": "FLOAT"}
     ],
-    
     "budgets": [
-        {"name": "budget_id", "type": "STRING"},
-        {"name": "budget_name", "type": "STRING"},  # Added from 'name' field
+        {"name": "budget_id", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "budget_name", "type": "STRING"},
         {"name": "budget_amount", "type": "FLOAT"},
-        {"name": "date", "type": "DATE"}
-]
+        {"name": "date", "type": "DATE", "mode": "REQUIRED"}
+    ]
 }
+
 # Partitioning fields
-REFERENCE_FIELDS = {
+PARTITION_FIELDS = {
     "campaigns": "date",
     "ad_groups": "date",
     "ads": "date",
@@ -98,28 +95,8 @@ REFERENCE_FIELDS = {
     "budgets": "date"
 }
 
-# Required fields for each table (data validation)
-REQUIRED_FIELDS = {
-    "campaigns": ["campaign_id", "campaign_name", "date"],
-    "ad_groups": ["ad_group_id", "campaign_id", "date"],
-    "ads": ["ad_id", "ad_group_id", "date"],
-    "metrics": ["ad_group_id", "date"],
-    "budgets": ["budget_id", "date"] 
-}
-
-
-
-# Partitioning fields (by 'date' or another field)
-REFERENCE_FIELDS = {
-    "campaigns": "date",
-    "ad_groups": "date",
-    "ads": "date",
-    "metrics": "date",
-    "budgets": "date"
-}
-
-# Clustering fields (fields used for clustering)
-CLUSTERING_CONFIG = {
+# Clustering fields
+CLUSTERING_FIELDS = {
     "campaigns": ["campaign_id", "status"],
     "ad_groups": ["campaign_id", "ad_group_id", "status"],
     "ads": ["ad_group_id", "status"],
@@ -127,10 +104,14 @@ CLUSTERING_CONFIG = {
     "budgets": ["budget_id"]
 }
 
-
-from datetime import datetime
-
-from datetime import datetime
+# Required fields for validation
+REQUIRED_FIELDS = {
+    "campaigns": ["campaign_id", "campaign_name", "date"],
+    "ad_groups": ["ad_group_id", "campaign_id", "date"],
+    "ads": ["ad_id", "ad_group_id", "date"],
+    "metrics": ["ad_group_id", "date"],
+    "budgets": ["budget_id", "date"] 
+}
 
 def log_pipeline_metadata(
     table_name: str,
@@ -301,45 +282,49 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 def create_bigquery_tables():
     """Create or update BigQuery tables with partitioning and clustering."""
-    for table_name, schema_def in TABLE_SCHEMAS.items():
+    create_metadata_table()  # Ensure metadata table exists
+    
+    for table_name in TABLE_SCHEMAS.keys():
         table_ref = client.dataset(DATASET_ID).table(table_name)
-        schema = [bigquery.SchemaField(field["name"], field["type"]) for field in schema_def]
+        schema = [bigquery.SchemaField(**field) for field in TABLE_SCHEMAS[table_name]]
         
-        # Get partitioning and clustering config
-        partition_field = REFERENCE_FIELDS.get(table_name)
-        clustering_fields = CLUSTERING_CONFIG.get(table_name, [])
+        partition_field = PARTITION_FIELDS.get(table_name)
+        clustering_fields = CLUSTERING_FIELDS.get(table_name, [])
         
         try:
             # Check if table exists
             table = client.get_table(table_ref)
-            logger.info(f"ℹ️ Table {table_name} exists, checking partitioning/clustering")
+            logger.info(f"Table {table_name} exists, updating if needed")
             
+            # Update table configuration if needed
             needs_update = False
+            new_config = table._properties
             
-            # Check partitioning
+            # Update partitioning if needed
             if partition_field:
                 if not table.time_partitioning or table.time_partitioning.field != partition_field:
-                    logger.info(f"🔄 Updating partitioning for {table_name}")
-                    table.time_partitioning = bigquery.TimePartitioning(
-                        type_=bigquery.TimePartitioningType.DAY,
-                        field=partition_field
-                    )
+                    new_config["timePartitioning"] = {
+                        "type": "DAY",
+                        "field": partition_field
+                    }
                     needs_update = True
             
-            # Check clustering
+            # Update clustering if needed
             if clustering_fields:
                 if not table.clustering_fields or set(table.clustering_fields) != set(clustering_fields):
-                    logger.info(f"🔄 Updating clustering for {table_name}")
-                    table.clustering_fields = clustering_fields
+                    new_config["clustering"] = {
+                        "fields": clustering_fields
+                    }
                     needs_update = True
             
-            # Apply updates if needed
             if needs_update:
-                client.update_table(table, ["time_partitioning", "clustering"])
-                logger.info(f"✅ Updated table {table_name} with partitioning/clustering")
+                table._properties = new_config
+                client.update_table(table, fields=["timePartitioning", "clustering"])
+                logger.info(f"Updated table {table_name} configuration")
             
-        except Exception:
-            # Create new table with partitioning and clustering
+        except Exception as e:
+            # Table doesn't exist, create it
+            logger.info(f"Creating new table {table_name}")
             table = bigquery.Table(table_ref, schema=schema)
             
             if partition_field:
@@ -352,7 +337,7 @@ def create_bigquery_tables():
                 table.clustering_fields = clustering_fields
             
             client.create_table(table)
-            logger.info(f"✅ Created table {table_name} with partitioning and clustering")
+            logger.info(f"Created table {table_name} with partitioning and clustering")
 
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
@@ -501,57 +486,68 @@ def log_pipeline_metadata(
     execution_date: Optional[Union[datetime, str]] = None
 ):
     """Log pipeline execution metadata to BigQuery."""
-    
-    # Handle execution_date conversion
-    exec_date = None
-    if isinstance(execution_date, str):
-        try:
-            # Try parsing ISO format string
-            exec_date = datetime.fromisoformat(execution_date)
-        except ValueError:
-            try:
-                # Try parsing Airflow's log format
-                exec_date = datetime.strptime(execution_date, "%Y-%m-%dT%H:%M:%S%z")
-            except ValueError:
-                # Fall back to current time if parsing fails
-                exec_date = datetime.utcnow()
-    elif isinstance(execution_date, datetime):
-        exec_date = execution_date
-    else:
-        exec_date = datetime.utcnow()
-
-    metadata = {
-        "run_id": str(uuid.uuid4()),
-        "table_name": table_name,
-        "execution_date": exec_date.isoformat(),
-        "status": status,
-        "rows_processed": rows_processed,
-        "error_message": error_message,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
     try:
+        # Handle execution_date conversion
+        if isinstance(execution_date, str):
+            try:
+                exec_date = datetime.fromisoformat(execution_date.replace("Z", "+00:00"))
+            except ValueError:
+                exec_date = datetime.utcnow()
+        elif isinstance(execution_date, datetime):
+            exec_date = execution_date
+        else:
+            exec_date = datetime.utcnow()
+        
+        # Prepare metadata
+        metadata = {
+            "run_id": str(uuid.uuid4()),
+            "table_name": table_name,
+            "execution_date": exec_date.isoformat(),
+            "status": status,
+            "rows_processed": rows_processed,
+            "error_message": error_message,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        # Insert into BigQuery
         errors = client.insert_rows_json(METADATA_TABLE, [metadata])
         if errors:
-            logger.error(f"❌ Failed to log metadata: {errors}")
+            logger.error(f"Failed to log metadata: {errors}")
+        else:
+            logger.info(f"Logged metadata for {table_name} with status {status}")
+            
     except Exception as e:
-        logger.error(f"❌ Error logging metadata: {str(e)}")
+        logger.error(f"Error logging metadata: {str(e)}")
 
 def migrate_metrics_schema():
-    """Migrate the metrics table schema to accept string IDs and updated fields."""
+    """Migrate the metrics table schema without creating a temp table."""
     table_ref = client.dataset(DATASET_ID).table("metrics")
-    temp_table_ref = client.dataset(DATASET_ID).table("metrics_temp")
-
+    
     try:
-        # First check if the table exists
-        try:
-            table = client.get_table(table_ref)
-            # Get existing partitioning and clustering
-            partition_field = table.time_partitioning.field if table.time_partitioning else None
-            clustering_fields = table.clustering_fields if table.clustering_fields else []
-        except Exception:
-            logger.info("Metrics table doesn't exist yet, no migration needed")
-            return
+        # Get current table
+        table = client.get_table(table_ref)
+        
+        # Define new schema
+        new_schema = [
+            bigquery.SchemaField("ad_group_id", "STRING", mode="REQUIRED"),
+            bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
+            bigquery.SchemaField("clicks", "INTEGER"),
+            bigquery.SchemaField("impressions", "INTEGER"),
+            bigquery.SchemaField("ctr", "FLOAT"),
+            bigquery.SchemaField("average_cpc", "FLOAT"),
+            bigquery.SchemaField("cost_micros", "INTEGER"),
+            bigquery.SchemaField("conversions", "FLOAT")
+        ]
+        
+        # Update table schema in place
+        table.schema = new_schema
+        client.update_table(table, ["schema"])
+        
+        logger.info("Successfully migrated metrics table schema")
+        
+    except Exception as e:
+        logger.error(f"Failed to migrate metrics schema: {str(e)}")
+        raise
 
         # Build new schema with correct types
         new_schema = [
@@ -956,43 +952,18 @@ with DAG(
         execution_timeout=timedelta(minutes=10)
     )
 
-    # ✅ Grouped BigQuery schema migration tasks
-    with TaskGroup("schema_migrations", tooltip="BigQuery schema migrations") as schema_migrations:
-        migrate_metrics_schema = PythonOperator(
-            task_id="migrate_metrics_schema",
-            python_callable=migrate_metrics_schema,
-            execution_timeout=timedelta(minutes=15)
-        )
+    # Schema migrations
+    migrate_schemas = PythonOperator(
+        task_id="migrate_schemas",
+        python_callable=lambda: None,  # Replace with your migration logic
+        execution_timeout=timedelta(minutes=15)
+    )
 
-        migrate_ad_groups_schema_task = PythonOperator(
-            task_id="migrate_ad_groups_schema",
-            python_callable=migrate_ad_groups_schema,
-            execution_timeout=timedelta(minutes=10)
-        )
-
-        migrate_ads_schema_task = PythonOperator(
-            task_id="migrate_ads_schema",
-            python_callable=migrate_ads_schema,
-            execution_timeout=timedelta(minutes=10)
-        )
-
-        migrate_budgets_schema_task = PythonOperator(
-            task_id="migrate_budgets_schema",
-            python_callable=migrate_budgets_schema,
-            execution_timeout=timedelta(minutes=10)
-        )
-
-        migrate_campaigns_schema_task = PythonOperator(
-            task_id="migrate_campaigns_schema",
-            python_callable=migrate_campaigns_schema,
-            execution_timeout=timedelta(minutes=10)
-        )
-
-    # ✅ Data extraction and loading tasks
+    # Data extraction and loading tasks
     extract_load_campaigns = PythonOperator(
         task_id="extract_load_campaigns",
         python_callable=extract_and_load,
-        op_kwargs={"table": "campaigns", "execution_date": "{{ execution_date }}"},
+        op_kwargs={"table": "campaigns", "execution_date": "{{ execution_date.isoformat() }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -1000,7 +971,7 @@ with DAG(
     extract_load_ad_groups = PythonOperator(
         task_id="extract_load_ad_groups",
         python_callable=extract_and_load,
-        op_kwargs={"table": "ad_groups", "execution_date": "{{ execution_date }}"},
+        op_kwargs={"table": "ad_groups", "execution_date": "{{ execution_date.isoformat() }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
@@ -1008,28 +979,28 @@ with DAG(
     extract_load_ads = PythonOperator(
         task_id="extract_load_ads",
         python_callable=extract_and_load,
-        op_kwargs={"table": "ads", "execution_date": "{{ execution_date }}"},
+        op_kwargs={"table": "ads", "execution_date": "{{ execution_date.isoformat() }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
 
     extract_load_metrics = PythonOperator(
-    task_id="extract_load_metrics",
-    python_callable=extract_and_load,
-    op_kwargs={"table": "metrics", "execution_date": "{{ execution_date.isoformat() }}"},
-    execution_timeout=timedelta(minutes=30),
-    retries=1
-)
-
-    extract_load_budgets = PythonOperator(
-        task_id="extract_load_budgets",
+        task_id="extract_load_metrics",
         python_callable=extract_and_load,
-        op_kwargs={"table": "budgets", "execution_date": "{{ execution_date }}"},
+        op_kwargs={"table": "metrics", "execution_date": "{{ execution_date.isoformat() }}"},
         execution_timeout=timedelta(minutes=30),
         retries=1
     )
 
-    # ✅ dbt run command
+    extract_load_budgets = PythonOperator(
+        task_id="extract_load_budgets",
+        python_callable=extract_and_load,
+        op_kwargs={"table": "budgets", "execution_date": "{{ execution_date.isoformat() }}"},
+        execution_timeout=timedelta(minutes=30),
+        retries=1
+    )
+
+    # dbt run command
     dbt_run = BashOperator(
         task_id="run_dbt_build",
         bash_command="dbt build --project-dir /home/airflow/gcs/dags/dbt_project --profiles-dir /home/airflow/.dbt",
@@ -1037,17 +1008,8 @@ with DAG(
         retries=1
     )
 
-    # ✅ DAG dependencies
-    init_tables >> schema_migrations >> [
-        extract_load_campaigns,
-        extract_load_ad_groups,
-        extract_load_ads,
-        extract_load_metrics,
-        extract_load_budgets
-    ]
-
-    # Run dbt after all the data loading tasks are complete
-    [
+    # DAG dependencies
+    init_tables >> migrate_schemas >> [
         extract_load_campaigns,
         extract_load_ad_groups,
         extract_load_ads,
