@@ -277,7 +277,7 @@ def validate_data(df: pd.DataFrame, table_name: str) -> bool:
 
 
 def create_bigquery_tables():
-    """Ensure all BigQuery tables are created or recreated with partitioning and clustering."""
+    """Ensure all BigQuery tables are recreated if partitioning/clustering is incorrect."""
     create_metadata_table()
 
     for table_name, schema_fields in TABLE_SCHEMAS.items():
@@ -295,50 +295,39 @@ def create_bigquery_tables():
 
         try:
             table = client.get_table(table_ref)
-            logger.info(f"🔍 Table {table_name} exists. Checking configuration...")
+            current_partition_field = table.time_partitioning.field if table.time_partitioning else None
+            current_clustering = table.clustering_fields or []
 
-            # If partitioning field is missing or wrong, recreate the table
-            needs_recreate = not table.time_partitioning or (
-                table.time_partitioning.field != partition_field
-            )
-
-            if needs_recreate:
-                logger.warning(f"♻️ Recreating {table_name} to apply partitioning.")
+            # ✅ RECREATE if partitioning or clustering is missing/wrong
+            if current_partition_field != partition_field or set(current_clustering) != set(clustering_fields):
+                logger.warning(f"♻️ Recreating table {table_name} due to incorrect partitioning or clustering.")
                 client.delete_table(table_ref, not_found_ok=True)
 
-                table = bigquery.Table(table_ref, schema=schema)
-                if partition_field:
-                    table.time_partitioning = bigquery.TimePartitioning(
-                        type_=bigquery.TimePartitioningType.DAY,
-                        field=partition_field
-                    )
-                if clustering_fields:
-                    table.clustering_fields = clustering_fields
-
-                client.create_table(table)
-                logger.info(f"✅ Recreated {table_name} with partitioning and clustering.")
-                continue  # skip further checks for this table
-
-            # Update clustering if it's wrong
-            if set(table.clustering_fields or []) != set(clustering_fields):
-                table.clustering_fields = clustering_fields
-                client.update_table(table, ["clustering_fields"])
-                logger.info(f"🔁 Updated clustering for {table_name}")
-
-        except Exception as e:
-            logger.warning(f"📁 Creating table {table_name} (it may not exist): {e}")
-            table = bigquery.Table(table_ref, schema=schema)
-
-            if partition_field:
-                table.time_partitioning = bigquery.TimePartitioning(
+                new_table = bigquery.Table(table_ref, schema=schema)
+                new_table.time_partitioning = bigquery.TimePartitioning(
                     type_=bigquery.TimePartitioningType.DAY,
                     field=partition_field
                 )
+                if clustering_fields:
+                    new_table.clustering_fields = clustering_fields
+                client.create_table(new_table)
+
+                logger.info(f"✅ Recreated table {table_name} with correct partitioning and clustering.")
+            else:
+                logger.info(f"✅ Table {table_name} already correctly configured.")
+
+        except Exception as e:
+            logger.warning(f"📁 Creating table {table_name} (not found or error): {e}")
+            table = bigquery.Table(table_ref, schema=schema)
+            table.time_partitioning = bigquery.TimePartitioning(
+                type_=bigquery.TimePartitioningType.DAY,
+                field=partition_field
+            )
             if clustering_fields:
                 table.clustering_fields = clustering_fields
-
             client.create_table(table)
             logger.info(f"✅ Created table {table_name} with partitioning and clustering.")
+
 
 def validate_data(df: pd.DataFrame, table_name: str) -> bool:
     """Validate the incoming data for missing fields and invalid values."""
@@ -484,30 +473,43 @@ def log_pipeline_metadata(
     error_message: Optional[str] = None,
     execution_date: Optional[Union[datetime, str]] = None
 ):
+    """
+    Log pipeline execution metadata to BigQuery table 'pipeline_metadata'.
+    Automatically handles datetime parsing and logs relevant status info.
+    """
     try:
+        # Convert execution_date to datetime if it’s a string (Jinja or ISO format)
         if isinstance(execution_date, str):
-            execution_date = datetime.fromisoformat(execution_date.replace("Z", "+00:00"))
+            try:
+                execution_date = datetime.fromisoformat(execution_date.replace("Z", "+00:00"))
+            except Exception:
+                logger.warning("⚠️ Could not parse execution_date string. Defaulting to current UTC time.")
+                execution_date = datetime.utcnow()
         elif not isinstance(execution_date, datetime):
             execution_date = datetime.utcnow()
 
+        # Construct metadata row
         metadata = {
             "run_id": str(uuid.uuid4()),
             "table_name": table_name,
-            "execution_date": execution_date,  # <-- pass as datetime object
+            "execution_date": execution_date.isoformat(),
             "status": status,
             "rows_processed": rows_processed,
-            "error_message": error_message,
-            "timestamp": datetime.utcnow()
+            "error_message": error_message or "",
+            "timestamp": datetime.utcnow().isoformat()
         }
 
+        # Insert metadata into BigQuery
         errors = client.insert_rows_json(METADATA_TABLE, [metadata])
+
         if errors:
-            logger.error(f"❌ Failed to log metadata: {errors}")
+            logger.error(f"❌ Failed to log metadata for {table_name}: {errors}")
         else:
-            logger.info(f"✅ Logged metadata for {table_name} [{status}]")
+            logger.info(f"✅ Logged metadata for {table_name}: status={status}, rows={rows_processed}")
 
     except Exception as e:
-        logger.error(f"❌ Error logging metadata: {str(e)}")
+        logger.error(f"❌ Error while logging metadata for {table_name}: {str(e)}")
+
 
 
 def migrate_metrics_schema():
