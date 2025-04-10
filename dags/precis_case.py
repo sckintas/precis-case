@@ -1038,7 +1038,7 @@ run_dbt_model = KubernetesPodOperator(
         )
     ],
     get_logs=True,
-    is_delete_operator_pod=True,
+    is_delete_operator_pod=False,
     dag=dag,
 )
 
@@ -1063,7 +1063,7 @@ run_dbt_test = KubernetesPodOperator(
         )
     ],
     get_logs=True,
-    is_delete_operator_pod=True,
+    is_delete_operator_pod=False,
     dag=dag,
 )
 
