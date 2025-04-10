@@ -1011,9 +1011,9 @@ with DAG(
 
     # Run dbt after all the data loading tasks are complete
     [
-        extract_load_campaigns,
-        extract_load_ad_groups,
-        extract_load_ads,
-        extract_load_metrics,
-        extract_load_budgets
-    ] >> dbt_run
+    extract_load_campaigns,
+    extract_load_ad_groups,
+    extract_load_ads,
+    extract_load_metrics,
+    extract_load_budgets
+   ] >> run_dbt_model
