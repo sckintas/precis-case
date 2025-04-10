@@ -19,7 +19,21 @@ from typing import Union, Optional
 import tempfile
 from airflow.utils.task_group import TaskGroup
 from datetime import datetime
+from kubernetes.client import V1Volume, V1VolumeMount, V1SecretVolumeSource
+from airflow.providers.cncf.kubernetes.operators.kubernetes_pod import KubernetesPodOperator
 
+# --- Volume (Secret) tanımı ---
+volume = V1Volume(
+    name="gcp-sa-key",
+    secret=V1SecretVolumeSource(secret_name="gcp-sa-key")
+)
+
+# --- Volume Mount tanımı ---
+volume_mount = V1VolumeMount(
+    name="gcp-sa-key",
+    mount_path="/dbt",  # bu dizine json dosyası mount edilecek
+    read_only=True
+)
 
 logger = logging.getLogger("airflow")
 logger.setLevel(logging.INFO)
@@ -1005,13 +1019,17 @@ with DAG(
     task_id='run_dbt_model',
     name='dbt-model-runner',
     namespace='airflow',
-    image = "europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.7"
-,
+    image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.8",
     cmds=["dbt"],
     arguments=["run", "--project-dir", "/dbt", "--profiles-dir", "/home/airflow/.dbt"],
     get_logs=True,
     is_delete_operator_pod=False,
-    in_cluster=True
+    in_cluster=True,
+    env_vars={
+        "GOOGLE_APPLICATION_CREDENTIALS": "/dbt/service-account.json"
+    },
+    volumes=[volume],
+    volume_mounts=[volume_mount]
 )
     
     # ✅ DAG dependencies
