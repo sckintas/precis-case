@@ -1015,21 +1015,29 @@ with DAG(
     # ✅ dbt run command
    
   
-    run_dbt_model = KubernetesPodOperator(
-    task_id='run_dbt_model',
-    name='dbt-model-runner',
-    namespace='airflow',
+    KubernetesPodOperator(
+    task_id="run_dbt_model",
+    namespace="airflow",
+    name="dbt-model-runner",
     image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.8",
     cmds=["dbt"],
     arguments=["run", "--project-dir", "/dbt", "--profiles-dir", "/home/airflow/.dbt"],
+    volumes=[
+        V1Volume(
+            name="dbt-profiles",
+            secret=V1SecretVolumeSource(secret_name="dbt-profiles")
+        )
+    ],
+    volume_mounts=[
+        V1VolumeMount(
+            name="dbt-profiles",
+            mount_path="/home/airflow/.dbt",
+            read_only=True
+        )
+    ],
     get_logs=True,
-    is_delete_operator_pod=False,
-    in_cluster=True,
-    env_vars={
-        "GOOGLE_APPLICATION_CREDENTIALS": "/dbt/service-account.json"
-    },
-    volumes=[volume],
-    volume_mounts=[volume_mount]
+    is_delete_operator_pod=True,
+    dag=dag,
 )
     
     # ✅ DAG dependencies
