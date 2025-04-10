@@ -70,15 +70,21 @@ TABLE_SCHEMAS = {
         {"name": "date", "type": "DATE", "mode": "REQUIRED"}
     ],
     "metrics": [
-        {"name": "ad_group_id", "type": "STRING", "mode": "REQUIRED"},
-        {"name": "date", "type": "DATE", "mode": "REQUIRED"},
-        {"name": "clicks", "type": "INTEGER"},
-        {"name": "impressions", "type": "INTEGER"},
-        {"name": "ctr", "type": "FLOAT"},
-        {"name": "average_cpc", "type": "FLOAT"},
-        {"name": "cost_micros", "type": "INTEGER"},
-        {"name": "conversions", "type": "FLOAT"}
-    ],
+    {"name": "ad_group_id", "type": "STRING", "mode": "REQUIRED"},
+    {"name": "date", "type": "DATE", "mode": "REQUIRED"},
+    {"name": "clicks", "type": "INTEGER"},
+    {"name": "impressions", "type": "INTEGER"},
+    {"name": "ctr", "type": "FLOAT"},
+    {"name": "average_cpc", "type": "FLOAT"},
+    {"name": "cost_micros", "type": "INTEGER"},
+    {"name": "conversions", "type": "FLOAT"},
+    {"name": "conversion_value", "type": "FLOAT"},
+    {"name": "search_impression_share", "type": "FLOAT"},
+    {"name": "device_type", "type": "STRING"},
+    {"name": "campaign_id", "type": "STRING"},
+    {"name": "ad_id", "type": "STRING"}
+],
+
     "budgets": [
         {"name": "budget_id", "type": "STRING", "mode": "REQUIRED"},
         {"name": "budget_name", "type": "STRING"},
@@ -536,17 +542,20 @@ def migrate_metrics_schema():
     temp_table_ref = client.dataset(DATASET_ID).table(f"{table_name}_temp")
 
     new_schema = [
-        bigquery.SchemaField("ad_group_id", "STRING", mode="REQUIRED"),
-        bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
-        bigquery.SchemaField("impressions", "INTEGER"),
-        bigquery.SchemaField("clicks", "INTEGER"),
-        bigquery.SchemaField("ctr", "FLOAT"),
-        bigquery.SchemaField("average_cpc", "FLOAT"),
-        bigquery.SchemaField("cost_micros", "INTEGER"),
-        bigquery.SchemaField("conversions", "FLOAT"),
-        bigquery.SchemaField("campaign_id", "STRING"),
-        bigquery.SchemaField("ad_id", "STRING")
-    ]
+    bigquery.SchemaField("ad_group_id", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("date", "DATE", mode="REQUIRED"),
+    bigquery.SchemaField("clicks", "INTEGER"),
+    bigquery.SchemaField("impressions", "INTEGER"),
+    bigquery.SchemaField("ctr", "FLOAT"),
+    bigquery.SchemaField("average_cpc", "FLOAT"),
+    bigquery.SchemaField("cost_micros", "INTEGER"),
+    bigquery.SchemaField("conversions", "FLOAT"),
+    bigquery.SchemaField("conversion_value", "FLOAT"),
+    bigquery.SchemaField("search_impression_share", "FLOAT"),
+    bigquery.SchemaField("device_type", "STRING"),
+    bigquery.SchemaField("campaign_id", "STRING"),
+    bigquery.SchemaField("ad_id", "STRING")
+]
 
     try:
         client.delete_table(temp_table_ref, not_found_ok=True)
@@ -557,15 +566,19 @@ def migrate_metrics_schema():
         SELECT 
             CAST(ad_group_id AS STRING) AS ad_group_id,
             DATE(date) AS date,
-            impressions,
             clicks,
+            impressions,
             ctr,
             average_cpc,
             cost_micros,
             conversions,
+            NULL AS conversion_value,
+            NULL AS search_impression_share,
+            NULL AS device_type,
             NULL AS campaign_id,
             NULL AS ad_id
-        FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
+            FROM `{PROJECT_ID}.{DATASET_ID}.{table_name}`
+
         """
 
         job_config = bigquery.QueryJobConfig(destination=temp_table_ref, write_disposition="WRITE_TRUNCATE")
