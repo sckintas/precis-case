@@ -1014,8 +1014,9 @@ with DAG(
 
     # ✅ dbt run command
    
+   
   
-    KubernetesPodOperator(
+    run_dbt_model = KubernetesPodOperator(
     task_id="run_dbt_model",
     namespace="airflow",
     name="dbt-model-runner",
