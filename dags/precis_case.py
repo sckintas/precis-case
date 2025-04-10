@@ -996,7 +996,7 @@ with DAG(
     cmds=["dbt"],
     arguments=["run", "--project-dir", "/dbt"],
     get_logs=True,
-    is_delete_operator_pod=True,
+    is_delete_operator_pod=False,
     in_cluster=True
 )
     
