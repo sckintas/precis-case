@@ -1042,6 +1042,33 @@ run_dbt_model = KubernetesPodOperator(
     dag=dag,
 )
 
+run_dbt_test = KubernetesPodOperator(
+    task_id="run_dbt_test",
+    namespace="airflow",
+    name="dbt-test-runner",
+    image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.8",
+    cmds=["dbt"],
+    arguments=["test", "--project-dir", "/dbt", "--profiles-dir", "/home/airflow/.dbt"],
+    volumes=[
+        V1Volume(
+            name="dbt-profiles",
+            secret=V1SecretVolumeSource(secret_name="dbt-profiles")
+        )
+    ],
+    volume_mounts=[
+        V1VolumeMount(
+            name="dbt-profiles",
+            mount_path="/home/airflow/.dbt",
+            read_only=True
+        )
+    ],
+    get_logs=True,
+    is_delete_operator_pod=True,
+    dag=dag,
+)
+
+
+
 # ✅ DAG dependencies
 init_tables >> schema_migrations >> [
     extract_load_campaigns,
@@ -1058,4 +1085,4 @@ init_tables >> schema_migrations >> [
     extract_load_ads,
     extract_load_metrics,
     extract_load_budgets
-] >> run_dbt_model
+] >> run_dbt_model >> run_dbt_test
