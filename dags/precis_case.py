@@ -992,7 +992,7 @@ with DAG(
     task_id="run_dbt_model",
     name="dbt-model-runner",
     namespace="airflow",
-    image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.0",
+    image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.4",
     cmds=["dbt"],
     arguments=["run", "--project-dir", "/dbt"],
     get_logs=True,
