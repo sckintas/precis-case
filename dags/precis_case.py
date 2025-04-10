@@ -989,12 +989,12 @@ with DAG(
    
   
     run_dbt_model = KubernetesPodOperator(
-    task_id="run_dbt_model",
-    name="dbt-model-runner",
-    namespace="airflow",
-    image="europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.5",
+    task_id='run_dbt_model',
+    name='dbt-model-runner',
+    namespace='airflow',
+    image='europe-west1-docker.pkg.dev/silicon-window-456317-n1/airflow-gke/dbt-runner:1.0.6',
     cmds=["dbt"],
-    arguments=["run", "--project-dir", "/dbt"],
+    arguments=["run", "--project-dir", "/dbt", "--profiles-dir", "/home/airflow/.dbt"],
     get_logs=True,
     is_delete_operator_pod=False,
     in_cluster=True
