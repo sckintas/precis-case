@@ -1016,7 +1016,8 @@ with DAG(
    
    
   
-    run_dbt_model = KubernetesPodOperator(
+    # ✅ dbt run command
+run_dbt_model = KubernetesPodOperator(
     task_id="run_dbt_model",
     namespace="airflow",
     name="dbt-model-runner",
@@ -1040,21 +1041,21 @@ with DAG(
     is_delete_operator_pod=True,
     dag=dag,
 )
-    
-    # ✅ DAG dependencies
-    init_tables >> schema_migrations >> [
-        extract_load_campaigns,
-        extract_load_ad_groups,
-        extract_load_ads,
-        extract_load_metrics,
-        extract_load_budgets
-    ]
 
-    # Run dbt after all the data loading tasks are complete
-    [
+# ✅ DAG dependencies
+init_tables >> schema_migrations >> [
     extract_load_campaigns,
     extract_load_ad_groups,
     extract_load_ads,
     extract_load_metrics,
     extract_load_budgets
-   ] >> run_dbt_model
+]
+
+# Run dbt after all the data loading tasks are complete
+[
+    extract_load_campaigns,
+    extract_load_ad_groups,
+    extract_load_ads,
+    extract_load_metrics,
+    extract_load_budgets
+] >> run_dbt_model
