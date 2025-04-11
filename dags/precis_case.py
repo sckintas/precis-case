@@ -228,7 +228,12 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                 logger.info("🧪 Normalizing budgets...")
 
                 for item in data:
-                    item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
+                    # If 'amount_micros' exists, convert it; otherwise leave budget_amount as-is
+                    if "amount_micros" in item:
+                        item["budget_amount"] = round(item["amount_micros"] / 1_000_000)
+                    else:
+                        # Ensure it's an integer
+                        item["budget_amount"] = int(item.get("budget_amount", 0))
 
                     if 'id' in item and 'budget_id' not in item:
                         item['budget_id'] = item.pop('id')
@@ -240,6 +245,7 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                         item['campaign_id'] = "default_campaign"
 
                 logger.info(f"🧪 Sample normalized budget row: {json.dumps(data[0], indent=2)}")
+
 
 
             elif "metrics" in url:
