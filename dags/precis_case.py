@@ -228,12 +228,7 @@ def fetch_data_from_api(url: str) -> pd.DataFrame:
                 logger.info("🧪 Normalizing budgets...")
 
                 for item in data:
-                    if amount_micros is not None:
-                        item["budget_amount"] = round(amount_micros / 1_000_000, 2)
-                    elif "budget_amount" in item:
-                        item["budget_amount"] = float(item["budget_amount"])
-                    else:
-                        item["budget_amount"] = 0.0
+                    item["budget_amount"] = round(item.get("amount_micros", 0) / 1_000_000, 2)
 
                     if 'id' in item and 'budget_id' not in item:
                         item['budget_id'] = item.pop('id')
